@@ -1,0 +1,8 @@
+# Phase 0 synthetic hosts sample
+127.0.0.1 localhost.test
+127.0.0.1 api.test web.test # shared local services
+10.0.0.8 api.test
+::1 ipv6.test
+# 0.0.0.0 disabled-looking.test
+
+not-an-ip broken.test
