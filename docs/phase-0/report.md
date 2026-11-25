@@ -33,6 +33,7 @@
 ### 本地 Linux x86_64
 
 - `go test ./...`：通过。
+- `go test -race ./...`：通过。
 - `go vet ./...`：通过。
 - `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...`：通过。
 - `./scripts/build-darwin-arm64.sh`：MyGo v0.10.0 成功生成 `mHost Phase 0.app`；Linux 按框架预期跳过 DMG 和 macOS 签名。
@@ -41,14 +42,16 @@
 
 ### GitHub Actions macOS arm64
 
-待分支推送后记录 run URL、commit 和结果。验收项目：
+最终代码验证 run：[Phase 0 validation #45619481582](https://github.com/igevin/mHost-go/actions/runs/45619481582)，commit `2f48ceb50865ba76d2ba0ad911dbe9e9e587f1f7`，全部步骤通过。
 
-- [ ] `go test ./...` 和 `go vet ./...` 通过。
-- [ ] 只构建 darwin/arm64，runner 架构为 arm64。
-- [ ] `.app` 和 DMG 成功生成并上传。
-- [ ] 主程序与包内 proxy 的 `lipo`/`codesign --verify` 通过。
-- [ ] 从 `.app` 内执行 proxy `-check` 成功。
-- [ ] artifact 包含构建 commit、Go/MyGo 版本和 SHA-256。
+- [x] `go test ./...` 和 `go vet ./...` 通过。
+- [x] 只构建 darwin/arm64，runner 架构为 arm64。
+- [x] `.app` 和 DMG 成功生成并上传。
+- [x] 主程序与包内 proxy 的 `lipo`/`codesign --verify` 通过。
+- [x] 从 `.app` 内执行 proxy `-check` 成功。
+- [x] artifact 包含构建 commit、Go/MyGo 版本和 SHA-256。
+
+已实际下载该 run 的 `mhost-phase-0-darwin-arm64` artifact。`SHA256SUMS` 校验通过；下载后的主程序和包内 proxy 经 `file` 复核均为 Mach-O 64-bit arm64。构建元数据确认 Go 1.27.3 darwin/arm64、MyGo v0.10.0 和上述代码 commit。后续报告文档提交不改变该代码基线。
 
 ## 源项目兼容与差异
 
