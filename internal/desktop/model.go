@@ -14,6 +14,7 @@ type DNSManager interface {
 	Start(context.Context) error
 	Stop(context.Context) error
 	Running() bool
+	Errors() <-chan error
 }
 
 type Model struct {

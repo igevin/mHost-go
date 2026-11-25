@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -241,6 +242,14 @@ func TestManager_UnexpectedProxyExitTriggersRecovery(t *testing.T) {
 	})
 	if manager.Running() {
 		t.Fatal("manager still running after proxy exit")
+	}
+	select {
+	case err := <-manager.Errors():
+		if err == nil || !strings.Contains(err.Error(), "exited") {
+			t.Fatalf("proxy event = %v", err)
+		}
+	default:
+		t.Fatal("proxy exit did not publish a lifecycle event")
 	}
 }
 

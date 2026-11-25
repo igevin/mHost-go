@@ -27,6 +27,10 @@ func (f *fakeDNSManager) Running() bool {
 	return f.running
 }
 
+func (f *fakeDNSManager) Errors() <-chan error {
+	return nil
+}
+
 type fakeServer struct {
 	closeCalls int
 }

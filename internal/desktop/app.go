@@ -132,6 +132,17 @@ func (a *App) ready() {
 			})
 		}()
 	}
+	if a.manager != nil {
+		if events := a.manager.Errors(); events != nil {
+			go func() {
+				for err := range events {
+					a.window.Update(func() {
+						a.Model.DNSStatus = "DNS proxy event: " + err.Error()
+					})
+				}
+			}()
+		}
+	}
 	tray, err := mygo.NewTray(mygo.TrayOptions{
 		Icon:           trayIcon(),
 		IconIsTemplate: true,

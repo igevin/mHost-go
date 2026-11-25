@@ -132,7 +132,9 @@ func (m *Manager) monitor(process ProxyProcess) {
 	}
 	m.process = nil
 	recoveryErr := m.restorePendingLocked(context.Background())
-	if waitErr != nil {
+	if waitErr == nil {
+		waitErr = errors.New("DNS proxy exited unexpectedly")
+	} else {
 		waitErr = fmt.Errorf("DNS proxy exited: %w", waitErr)
 	}
 	m.report(errors.Join(waitErr, recoveryErr))
