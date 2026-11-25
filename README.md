@@ -48,25 +48,47 @@ Phase 0 期间固定上述验证版本。确需调整时，必须在验证报告
 
 ## 构建与验证
 
-以下是 Phase 0 计划建立的目标命令；相关源码和构建配置落地前，当前仓库还不能直接执行这些命令：
+需要 Go `1.27.3+`。运行全部单元测试和无窗口 UI 测试：
 
 ```sh
 go test ./...
-go tool mygo build -platform darwin/arm64
+go vet ./...
 ```
 
-目标构建流程在 GitHub Actions 的 macOS runner 上运行，并要求：
+在 macOS 上运行原生 UI 原型：
 
-- `.app` 内包含 `mhost-dns-proxy`，主程序和 proxy 均为 arm64。
-- 生成 DMG 并上传为 GitHub Actions artifact。
-- 记录构建 commit、Go/MyGo 版本和产物校验值。
-- 从安装后的 `.app` 验证 proxy 可以执行，而不只检查开发目录中的二进制。
+```sh
+go tool mygo dev
+```
+
+只读解析合成存储样本：
+
+```sh
+go run ./cmd/storage-probe -root fixtures/storage/v2-full
+go run ./cmd/storage-probe -root fixtures/storage/mixed-invalid
+```
+
+第二个命令会输出逐文件错误并以非零状态退出，这是损坏语料的预期结果。探针不会写回或迁移输入。
+
+构建 arm64 主程序和包内 proxy：
+
+```sh
+./scripts/build-darwin-arm64.sh
+```
+
+脚本先交叉构建 `resources/darwin-arm64/bin/mhost-dns-proxy`，再执行 `go tool mygo build -platform darwin/arm64`。macOS runner 还会验证架构、ad-hoc 签名和包内 proxy 自检，并生成 DMG、`SHA256SUMS` 与构建元数据。
 
 ## 运行测试构建
 
-Phase 0 构建产物仅用于专用测试环境。下载到 M 系列 Mac 后，需要在“隐私与安全性”中显式允许打开，或仅对测试包移除 quarantine 属性。
+Phase 0 构建产物仅用于专用 M 系列 Mac 测试环境。从 GitHub Actions 下载 `mhost-phase-0-darwin-arm64` artifact 后，需要在“隐私与安全性”中显式允许打开，或仅对测试包移除 quarantine 属性：
 
-ad-hoc 签名不代表通过 Apple 公证，Gatekeeper 提示属于预期行为，不以 `spctl` 通过作为验收条件。具体下载、放行和真机验证步骤将随首个可运行构建补充。
+```sh
+xattr -dr com.apple.quarantine "/path/to/mHost Phase 0.app"
+```
+
+ad-hoc 签名不代表通过 Apple 公证，Gatekeeper 提示属于预期行为，不以 `spctl` 通过作为验收条件。
+
+完整编辑、退出和 DNS 恢复步骤见 [Phase 0 真机验证手册](docs/phase-0/manual-validation.md)。启动 UI 不会主动修改 DNS；只有在 DNS Lab 中显式点击 Start DNS Test 才会请求授权。验证结果记录在 [Phase 0 报告](docs/phase-0/report.md)。
 
 ## 安全边界
 

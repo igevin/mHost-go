@@ -1,0 +1,11 @@
+{
+  "name": "mHost Phase 0",
+  "slug": "mhost-phase-0",
+  "identifier": "com.github.igevin.mhost.phase0",
+  "version": "0.0.0",
+  "main": "./cmd/mhost",
+  "out": "build",
+  "macos": {
+    "signingIdentity": "-"
+  }
+}

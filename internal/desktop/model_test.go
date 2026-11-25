@@ -105,6 +105,17 @@ func TestModel_HiddenWindowRetainsEditorState(t *testing.T) {
 	}
 }
 
+func TestModel_LoadLargeHostsAction(t *testing.T) {
+	model := testModel(t)
+	tester := ui.NewTester(model.View, 1100, 720)
+	if err := tester.Click("Load 100k"); err != nil {
+		t.Fatal(err)
+	}
+	if got := model.Editor.Buffer.LineCount(); got != 100001 {
+		t.Fatalf("line count = %d", got)
+	}
+}
+
 func TestModel_AlertDialog(t *testing.T) {
 	model := testModel(t)
 	tester := ui.NewTester(model.View, 1100, 720)
