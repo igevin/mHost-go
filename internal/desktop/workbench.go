@@ -47,6 +47,7 @@ type WorkbenchModel struct {
 
 	Phase         Phase
 	Workspace     app.Workspace
+	SummaryStale  bool
 	SelectedTab   int
 	Preview       *PreviewState
 	Receipt       *app.WriteReceipt
@@ -95,6 +96,10 @@ func (m *WorkbenchModel) OpenSource() {
 		m.Dispatch(func() {
 			if m.current(id) {
 				m.lastSourceRoot = path
+				m.Workspace = app.Workspace{}
+				m.SummaryStale = false
+				m.Receipt = nil
+				m.Backups = []app.BackupRef{}
 				m.Phase = PhaseLoading
 			}
 		})
@@ -113,6 +118,7 @@ func (m *WorkbenchModel) inspect(ctx context.Context, id uint64, sourceRoot stri
 			return
 		}
 		m.Workspace = workspace
+		m.SummaryStale = false
 		m.Phase = PhaseReady
 		m.SelectedTab = 0
 		m.Receipt = nil
@@ -140,6 +146,7 @@ func (m *WorkbenchModel) Reload() {
 				return
 			}
 			m.Workspace = workspace
+			m.SummaryStale = false
 			m.Phase = PhaseReady
 			m.finishOperation()
 		})
@@ -184,7 +191,7 @@ func (m *WorkbenchModel) Retry() {
 }
 
 func (m *WorkbenchModel) CreateWorkspace() {
-	if m.busy() || m.Workspace.ID == "" || m.Workspace.Access != app.AccessReadOnly {
+	if m.busy() || m.SummaryStale || m.Workspace.ID == "" || m.Workspace.Access != app.AccessReadOnly {
 		return
 	}
 	id, ctx := m.beginOperation()
@@ -214,6 +221,7 @@ func (m *WorkbenchModel) CreateWorkspace() {
 				return
 			}
 			m.Workspace = workspace
+			m.SummaryStale = false
 			m.Phase = PhaseReady
 			m.Receipt = nil
 			m.Backups = []app.BackupRef{}
@@ -331,6 +339,7 @@ func (m *WorkbenchModel) refreshAfterWrite(id uint64, ctx context.Context, works
 				return
 			}
 			m.Workspace = workspace
+			m.SummaryStale = false
 			m.Phase = PhaseReady
 			m.finishOperation()
 		})
@@ -417,7 +426,7 @@ func (m *WorkbenchModel) busy() bool {
 }
 
 func (m *WorkbenchModel) writable() bool {
-	return m.Phase == PhaseReady && m.Workspace.ID != "" && m.Workspace.Access == app.AccessWritable
+	return m.Phase == PhaseReady && !m.SummaryStale && m.Workspace.ID != "" && m.Workspace.Access == app.AccessWritable
 }
 
 func (m *WorkbenchModel) beginOperation() (uint64, context.Context) {
@@ -454,6 +463,9 @@ func (m *WorkbenchModel) setError(operation string, err error) {
 		return
 	}
 	m.Problem = classifyUIError(operation, err)
+	if m.Workspace.ID != "" && (operation == "reload" || operation == "write" || operation == "refresh_after_write") {
+		m.SummaryStale = true
+	}
 	if m.Workspace.ID == "" {
 		m.Phase = PhaseFailed
 	} else {
@@ -467,7 +479,7 @@ func classifyUIError(operation string, err error) *app.UIError {
 	if errors.As(err, &uiErr) {
 		copy := *uiErr
 		copy.Operation = operation
-		if copy.Detail == "" && err != nil {
+		if copy.Detail == "" && err != nil && err.Error() != copy.Message {
 			copy.Detail = err.Error()
 		}
 		return &copy

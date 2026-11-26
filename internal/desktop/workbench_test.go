@@ -148,6 +148,72 @@ func TestWorkbenchValidationWriteBackupAndRestore(t *testing.T) {
 	}
 }
 
+type toggleInspectService struct {
+	app.StorageService
+	fail bool
+}
+
+func (s *toggleInspectService) Inspect(ctx context.Context, root string) (app.Workspace, error) {
+	if s.fail {
+		return app.Workspace{}, errors.New("replacement source failed")
+	}
+	return s.StorageService.Inspect(ctx, root)
+}
+
+// UI-007.
+func TestWorkbenchReplacementSourceFailureClearsOldWorkspace(t *testing.T) {
+	service := &toggleInspectService{StorageService: demo.NewStorageService()}
+	picker := &stubDirectoryPicker{path: "/fixtures/v2-full"}
+	model := newTestWorkbench(service, picker)
+	model.OpenSource()
+	service.fail = true
+	picker.path = "/fixtures/v1-hosts"
+	model.OpenSource()
+	if model.Phase != PhaseFailed || model.Workspace.ID != "" || model.SummaryStale {
+		t.Fatalf("replacement failure retained old workspace: phase/workspace/stale = %v/%+v/%v", model.Phase, model.Workspace, model.SummaryStale)
+	}
+}
+
+type refreshFailureService struct {
+	app.StorageService
+	err error
+}
+
+func (s *refreshFailureService) Refresh(ctx context.Context, id string) (app.Workspace, error) {
+	if s.err != nil {
+		return app.Workspace{}, s.err
+	}
+	return s.StorageService.Refresh(ctx, id)
+}
+
+// UI-007.
+func TestWorkbenchReloadFailureMarksStaleAndBlocksWrites(t *testing.T) {
+	base := demo.NewStorageService()
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(base, picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-stale")
+	service := &refreshFailureService{StorageService: base, err: errors.New("refresh failed")}
+	model.Service = service
+	model.Reload()
+	if !model.SummaryStale || model.writable() {
+		t.Fatalf("reload failure did not block stale workspace: %+v", model)
+	}
+	model.PreviewValidationChanges()
+	if model.Preview != nil {
+		t.Fatal("stale workspace opened a write preview")
+	}
+	tester := ui.NewTester(model.View, 1120, 760)
+	tester.Frame()
+	if !tester.HasText("May be stale") {
+		t.Fatalf("stale marker is not visible: %q", tester.Texts())
+	}
+	service.err = nil
+	model.Reload()
+	if model.SummaryStale || !model.writable() {
+		t.Fatal("successful reload did not restore the workspace")
+	}
+}
+
 type saveFailureService struct {
 	app.StorageService
 	receipt app.WriteReceipt
@@ -173,7 +239,7 @@ func TestWorkbenchWriteFailureKeepsPartialReceipt(t *testing.T) {
 		receipt: app.WriteReceipt{WorkspaceID: model.Workspace.ID, Results: []app.WriteResult{{
 			Entity: "manifest", Status: app.WriteFailed, Preservation: app.PreservePreserved,
 		}}},
-		err: errors.New("injected write failure"),
+		err: &app.UIError{Kind: app.ErrorWrite, Message: "Injected write failure"},
 	}
 	model.Service = failure
 	model.PreviewValidationChanges()
@@ -181,6 +247,11 @@ func TestWorkbenchWriteFailureKeepsPartialReceipt(t *testing.T) {
 
 	if model.Problem == nil || model.Receipt == nil || model.Workspace.Revision != preview.BaseRevision {
 		t.Fatalf("failure problem/receipt/workspace = %+v/%+v/%+v", model.Problem, model.Receipt, model.Workspace)
+	}
+	tester := ui.NewTester(model.View, 1120, 760)
+	tester.Frame()
+	if !tester.HasText("Write error:") || !tester.HasText("May be stale") {
+		t.Fatalf("write failure is not explicit: %q", tester.Texts())
 	}
 }
 

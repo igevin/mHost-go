@@ -35,7 +35,7 @@ func (m *WorkbenchModel) View(c *ui.Context) {
 		}
 		if m.Problem != nil {
 			ui.Row(c).Gap(10).Padding(10, 20).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
-				ui.Text(c, "Warning: "+m.Problem.Message).Bold()
+				ui.Text(c, errorLabel(m.Problem.Kind)+m.Problem.Message).Bold()
 				if m.Problem.Path != "" {
 					ui.Text(c, m.Problem.Path).FontSize(12).TextColor(theme.TextMuted)
 				}
@@ -139,6 +139,9 @@ func (m *WorkbenchModel) overviewView(c *ui.Context) {
 			ui.Badge(c, fmt.Sprintf("%d Snapshots", len(summary.Snapshots)))
 			ui.Badge(c, fmt.Sprintf("%d Issues", len(summary.Issues)))
 		})
+		if m.SummaryStale {
+			ui.Text(c, "May be stale. Reload successfully before any write operation.").Bold()
+		}
 		if len(summary.Issues) != 0 {
 			ui.Text(c, fmt.Sprintf("Loaded with %d issues. Valid data remains available.", len(summary.Issues))).Bold()
 		} else {
@@ -195,7 +198,7 @@ func (m *WorkbenchModel) snapshotsView(c *ui.Context) {
 				if ui.Button(c, "Refresh Backups").Disabled(m.busy()).Clicked() {
 					m.LoadBackups()
 				}
-				if ui.Button(c, "Restore Latest Backup…").Disabled(m.busy() || len(m.Backups) == 0).Clicked() {
+				if ui.Button(c, "Restore Latest Backup…").Disabled(m.busy() || m.SummaryStale || len(m.Backups) == 0).Clicked() {
 					m.RequestRestore(m.Backups[len(m.Backups)-1].ID)
 				}
 			})
@@ -256,15 +259,15 @@ func (m *WorkbenchModel) actionBar(c *ui.Context) {
 			m.Reload()
 		}
 		if m.Workspace.Access == app.AccessReadOnly {
-			if ui.PrimaryButton(c, "Create Working Copy…").Disabled(m.busy()).Clicked() {
+			if ui.PrimaryButton(c, "Create Working Copy…").Disabled(m.busy() || m.SummaryStale).Clicked() {
 				m.CreateWorkspace()
 			}
 		} else if m.Workspace.StorageVersion == 1 {
-			if ui.PrimaryButton(c, "Preview Migration…").Disabled(m.busy() || m.Preview != nil).Clicked() {
+			if ui.PrimaryButton(c, "Preview Migration…").Disabled(m.busy() || m.SummaryStale || m.Preview != nil).Clicked() {
 				m.PreviewMigration()
 			}
 		} else {
-			if ui.PrimaryButton(c, "Preview Validation Changes…").Disabled(m.busy() || m.Preview != nil).Clicked() {
+			if ui.PrimaryButton(c, "Preview Validation Changes…").Disabled(m.busy() || m.SummaryStale || m.Preview != nil).Clicked() {
 				m.PreviewValidationChanges()
 			}
 		}
@@ -320,6 +323,9 @@ func (m *WorkbenchModel) previewDialog(c *ui.Context) {
 }
 
 func (m *WorkbenchModel) statusText() string {
+	if m.SummaryStale {
+		return "May be stale · reload before write operations"
+	}
 	if m.Problem != nil {
 		return "Operation needs attention · " + m.Problem.Message
 	}
@@ -354,6 +360,9 @@ func (m *WorkbenchModel) phaseText() string {
 }
 
 func (m *WorkbenchModel) actionSafetyText() string {
+	if m.SummaryStale {
+		return "May be stale. Write operations are disabled until Reload succeeds."
+	}
 	if m.QuitRequested {
 		return "Quit is waiting for the current storage operation."
 	}
@@ -370,6 +379,19 @@ func previewMessage(changes []app.ChangeItem) string {
 		fmt.Fprintf(&message, "\n%s · %s\n%s", change.Entity, change.Path, change.Summary)
 	}
 	return message.String()
+}
+
+func errorLabel(kind app.UIErrorKind) string {
+	switch kind {
+	case app.ErrorWrite, app.ErrorReadback, app.ErrorBackup:
+		return "Write error: "
+	case app.ErrorMigration:
+		return "Migration blocked: "
+	case app.ErrorInvalidJSON, app.ErrorValidation:
+		return "Validation error: "
+	default:
+		return "Error: "
+	}
 }
 
 func receiptSummary(receipt app.WriteReceipt) string {
