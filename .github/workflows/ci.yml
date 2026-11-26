@@ -1,0 +1,67 @@
+name: CI
+
+# PR 门禁：只跑「快 + 便宜 + 能挡住坏提交」的检查，ubuntu 足够。
+# macOS 上的 .app/DMG 打包与签名在 phase-0.yml 里单独跑，不在这里重复。
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go-checks:
+    name: Go checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # fetch-depth 0：darwin 交叉编译不需要，但后续想跑 git diff 时有历史
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Run static checks
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Run race detector
+        run: go test -race -count=1 ./...
+
+      - name: Build
+        run: go build ./...
+
+      # _darwin.go / _other.go 是构建约束成对存在的：linux 上 go build 根本不会
+      # 编译 darwin 分支。必须单独交叉编译，否则 darwin 专属代码的编译错误
+      # 要等到 macOS runner 上才会暴露。
+      - name: Cross-compile and vet for darwin/arm64
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ github.run_id }}
+          path: coverage.out
+          if-no-files-found: error
+          retention-days: 14

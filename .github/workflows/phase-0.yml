@@ -1,10 +1,15 @@
+# Phase 0 打包流水线：在 macOS arm64 runner 上产出 .app / DMG / 校验和并上传 artifact。
+#
+# 职责边界：gofmt / go vet / go test / go test -race 这些检查由 ci.yml 负责
+# （ubuntu runner，更快更便宜，每个 PR 和 master push 都跑）。本文件只保留
+# 必须在 macOS 上做的打包、签名与包内校验，避免 macOS 分钟被重复的检查步骤吃掉。
 name: Phase 0 validation
 
 on:
   pull_request:
   push:
     branches:
-      - feat/phase-0-validation
+      - master
   workflow_dispatch:
 
 permissions:
@@ -20,14 +25,6 @@ jobs:
           go-version-file: go.mod
       - name: Verify Apple silicon runner
         run: test "$(uname -m)" = arm64
-      - name: Check formatting
-        run: test -z "$(gofmt -l .)"
-      - name: Run tests
-        run: go test ./...
-      - name: Run race detector
-        run: go test -race ./...
-      - name: Run static checks
-        run: go vet ./...
       - name: Build arm64 app and DNS proxy
         run: ./scripts/build-darwin-arm64.sh
       - name: Verify packaged app

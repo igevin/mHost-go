@@ -1,0 +1,386 @@
+# AI 代码审查：以 gevinyu 身份在 PR 上发正式 review（COMMENTED，不计入 mergeability）。
+#
+# 设计来源：igevin/mHost 的 .github/workflows/ai-review.yml（Tauri 项目版），
+# 按 mHost-go 的技术栈改写。与参考实现的关键差异见文末「与参考实现的差异」。
+#
+# 评审标准在 .github/ai-review-prompt.md，防线在 .github/ai-review/guard.ts，
+# 两者都**只信任 base 分支的版本**——PR 里的副本不可信。
+#
+# Secrets：
+#   AI_REVIEW_API_KEY   兼容端点的 API Key（必填，挂在 LLM environment 上）
+#   GEVINYU_TOKEN       gevinyu 的 GitHub token，用于以 gevinyu 身份发 review
+#                       （scope: repo 或 public_repo）
+#
+# Variables（可选，均有默认值）：
+#   AI_REVIEW_MAX_DIFF_LINES   diff 上限（行数），默认 2000
+#   AI_REVIEW_MODEL            审查模型 ID，默认 MiniMax-M2.7
+#   AI_REVIEW_BASE_URL         OpenAI 兼容端点基址，默认 https://api.minimaxi.com/v1
+#
+# 与参考实现的差异：
+#   1. 发布身份：参考实现用 github.token（github-actions[bot]）发普通 PR 评论；
+#      本实现用 GEVINYU_TOKEN 发**正式 review**（event=COMMENT），时间线里显示
+#      「gevinyu left a comment」。选 COMMENT 而不是 APPROVE/REQUEST_CHANGES，
+#      是因为 gevinyu 在本仓库有 write 权限——一旦让 AI 发 APPROVE，等于把合并
+#      判定权交给模型，prompt injection 可以直接伪造放行。COMMENTED review
+#      不计入 mergeability，审查只提供信息，不构成门禁。
+#   2. guard / prompt 没有内嵌副本：参考实现在 workflow 里嵌了一份 guard 以便
+#      bootstrap，本实现选择 fail closed——base 缺失即报错退出，避免两份副本
+#      需要人工同步（参考实现自己的注释也承认这是维护债）。
+#   3. diff 超限的「核心目录」改为 Go 项目的路径集合。
+
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 要复审的 PR 编号
+        required: true
+        type: number
+
+# 同一 PR 只保留最新一次审查：连续 push 时取消在途运行，避免评论刷屏
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # 只读：用 github.token 解析 PR 元信息。真正的评论发布用 GEVINYU_TOKEN，
+  # 走的是另一个身份，workflow token 不需要写权限。
+  pull-requests: read
+
+env:
+  MAX_DIFF_LINES: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || 2000 }}
+  AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'MiniMax-M2.7' }}
+  AI_REVIEW_BASE_URL: ${{ vars.AI_REVIEW_BASE_URL || 'https://api.minimaxi.com/v1' }}
+  # 钉精确版本：该版本已验证 models.json 自定义 provider 的行为，
+  # 浮动版本会让「凭证注入方式」这类结论静默漂移
+  AI_REVIEW_PI_VERSION: 1.3.0
+  # 发布横幅前缀，**同时**被两个步骤使用：
+  #   1. Post review          —— 拼出评论头
+  #   2. Resolve previous AI review —— 按此前缀回捞上一轮结论
+  # 必须是单一真值源：两处各写一份字面量时，改动横幅措辞会让过滤静默失配 ——
+  # 取不到上一轮结论但全流程照常绿灯，收敛语义无声失效。
+  AI_REVIEW_HEADER_PREFIX: '## 🤖 AI Review'
+  REVIEWER_LOGIN: gevinyu
+
+jobs:
+  ai-review:
+    # fork PR 在 pull_request 触发下拿不到 secrets——这是 GitHub 平台按 PR
+    # 的 fork 属性在服务端扣住的，本行跳过是第一层（少跑一次注定无果的 job）；
+    # 手动触发不受限。
+    # 判空必须显式：GitHub 表达式做宽松相等，比较时 null 归一为数字 0，
+    # 因此 null == false 与 null != true 都判真——head.repo 为 null（如
+    # fork 被删除后的后续事件）时会放行，需先判 head.repo != null。
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo != null && github.event.pull_request.head.repo.fork == false) }}
+    runs-on: ubuntu-latest
+    # job 级余量要盖过内层 timeout 900s + 检出/安装
+    timeout-minutes: 20
+    # 模型密钥（AI_REVIEW_API_KEY）挂在 LLM environment 上
+    environment: LLM
+    steps:
+      - name: Resolve PR number
+        id: pr
+        env:
+          # workflow_dispatch 输入不经校验直接进 API，先当不可信字符串处理
+          PR_INPUT: ${{ github.event.inputs.pr_number }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            case "$PR_INPUT" in
+              ''|*[!0-9]*) echo "::error::pr_number must be a positive integer"; exit 1 ;;
+            esac
+            echo "number=$PR_INPUT" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # 统一检出 PR head：手动复审时拿到的也是 PR 代码而非 master
+          ref: refs/pull/${{ steps.pr.outputs.number }}/head
+          fetch-depth: 0
+          # 不把 GITHUB_TOKEN 留在 .git/config——Read 工具可达即是外泄面
+          persist-credentials: false
+
+      - name: Resolve base/head revisions
+        id: refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            head=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
+            base_ref=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName)
+          else
+            head="$EVENT_HEAD_SHA"
+            base_ref="$EVENT_BASE_REF"
+          fi
+          # 工作树钉住触发事件的 head，运行期间新 push 不会改变检出内容
+          git checkout -q "$head"
+          base=$(git merge-base "refs/remotes/origin/${base_ref}" "$head")
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+
+      - name: Sanitize untrusted PR files
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+        run: |
+          # PR 检出树是不可信输入：项目级 agent 配置目录会在 agent 模式下被
+          # 自动执行/加载，而 workflow_dispatch 复审 fork PR 是设计内场景——
+          # fork 作者可以在 PR 里植入它们，故运行前一律清除。Pi 侧虽已用
+          # --no-extensions/--no-approve/--no-context-files 等 flag 关闭
+          # 全部项目资源发现，这里的删除是纵深防御。
+          rm -rf .claude .mcp.json .pi
+          # 项目约定文件同样只信 base 版本
+          find . -not -path './.git/*' \( -name 'CLAUDE.md' -o -name 'CLAUDE.local.md' -o -name 'AGENTS.md' \) -delete
+          git show "$BASE:CLAUDE.md" > CLAUDE.md 2>/dev/null || true
+          git show "$BASE:AGENTS.md" > AGENTS.md 2>/dev/null || true
+          # guard 扩展：只信任 base 版本。先从工作树删除（防 PR 里的副本被
+          # 任何途径加载），再从 base 恢复到 runner 临时目录。
+          rm -f .github/ai-review/guard.ts
+          git show "$BASE:.github/ai-review/guard.ts" > "$RUNNER_TEMP/ai-review-guard.ts" 2>/dev/null || true
+          # 防线自校验：文件缺失或被掏空即拒绝运行审查（防静默失效）。
+          # 与参考实现不同，这里**没有内嵌兜底副本**——base 缺失即 fail closed。
+          if [ ! -s "$RUNNER_TEMP/ai-review-guard.ts" ] || ! grep -q "tool_call" "$RUNNER_TEMP/ai-review-guard.ts"; then
+            echo "::error::base 分支缺少 .github/ai-review/guard.ts（或内容被掏空）——拒绝在无防线状态下运行审查。该文件需随审查体系一起合入 master；若这是首次引入审查体系的 PR，本次审查会被跳过。"
+            exit 1
+          fi
+
+      - name: Build diff with size guard
+        id: diff
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
+        run: |
+          # 上限变量仅管理员可控，但仍防手滑配成非数字让 -gt 直接报错
+          case "$MAX_DIFF_LINES" in
+            ''|*[!0-9]*)
+              echo "::warning::AI_REVIEW_MAX_DIFF_LINES='$MAX_DIFF_LINES' is not a number, falling back to 2000"
+              MAX_DIFF_LINES=2000
+              ;;
+          esac
+          git diff "$BASE" "$HEAD" > pr.diff
+          total=$(wc -l < pr.diff | tr -d ' ')
+          mode=full
+          if [ "$total" -gt "$MAX_DIFF_LINES" ]; then
+            # 超限降级：Go 核心包 + 依赖清单 + CI 工作流与构建脚本——
+            # 对审查器而言这是最该覆盖的供应链面，超限 PR 不能靠凑行数躲开
+            # 对它们的改动。
+            mode=core-only
+            git diff "$BASE" "$HEAD" -- internal cmd go.mod go.sum .github/workflows scripts mygo.json > pr.diff || true
+            total=$(wc -l < pr.diff | tr -d ' ')
+            if [ "$total" -eq 0 ]; then
+              # PR 完全不碰核心目录时退回全量 diff 截断
+              mode=truncated
+              git diff "$BASE" "$HEAD" > pr.diff
+            fi
+          fi
+          if [ "$(wc -l < pr.diff | tr -d ' ')" -gt "$MAX_DIFF_LINES" ]; then
+            mode=truncated
+            head -n "$MAX_DIFF_LINES" pr.diff > pr.diff.part
+            mv pr.diff.part pr.diff
+          fi
+          # 评审标准只信 base 版本：PR 作者可以在自己的分支里改写「什么算 bug」，
+          # 让审查变成橡皮图章。base 尚无此文件时（首次引入审查体系的 PR）
+          # 拒绝运行，而不是退化成一份无标准的自由审查。
+          git show "$BASE:.github/ai-review-prompt.md" > ai-review-prompt.md 2>/dev/null || true
+          if [ ! -s ai-review-prompt.md ]; then
+            echo "::error::base 分支缺少 .github/ai-review-prompt.md——拒绝在无评审标准的状态下运行审查。该文件需随审查体系一起合入 master；若这是首次引入审查体系的 PR，本次审查会被跳过。"
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "lines=$(wc -l < pr.diff | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve previous AI review
+        id: prev
+        env:
+          GH_TOKEN: ${{ secrets.GEVINYU_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          # 复审上下文：把最近一条 AI review 喂回 prompt。
+          # 只认「本 workflow 发的、以横幅前缀开头、作者是 REVIEWER_LOGIN」的 review，
+          # 不取任意用户评论，也不取本账号的人工 review。
+          set +e
+          previous=$(timeout 90 gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" 2>/dev/null \
+            | jq -r --arg pfx "$AI_REVIEW_HEADER_PREFIX" --arg who "$REVIEWER_LOGIN" \
+                '[.[][] | select(.user.login == $who) | select(.body | startswith($pfx))] | last | .body // ""')
+          set -e
+          if [ -n "$previous" ]; then
+            printf '%s' "$previous" | head -c 4000 | iconv -c -f UTF-8 -t UTF-8 > "$RUNNER_TEMP/prev-review.md" \
+              || : > "$RUNNER_TEMP/prev-review.md"
+          else
+            : > "$RUNNER_TEMP/prev-review.md"
+          fi
+          echo "previous review bytes: $(wc -c < "$RUNNER_TEMP/prev-review.md" | tr -d ' ')"
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          # Pi 要求 Node ≥ 22.19
+          node-version: 22
+
+      - name: Install Pi
+        # 钉精确版本见 env.AI_REVIEW_PI_VERSION 的注释。--ignore-scripts 关闭
+        # 依赖生命周期脚本（Pi 正常安装不需要），缩小供应链执行面
+        run: npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${AI_REVIEW_PI_VERSION}"
+
+      - name: Write models.json
+        env:
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
+        run: |
+          # Pi 的 models.json 自定义 provider 接入任意 OpenAI 兼容端点。
+          # 密钥**不写进本文件**：落盘文件可能被模型的 read 工具读到经报告泄出。
+          # 改为 Run 步骤用 --api-key 经进程参数传入（runner 单次单租户；模型侧
+          # 无 bash 工具，guard 扩展封禁 /proc 读，无法从 cmdline/environ 取到 key）。
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          jq -n \
+            --arg baseUrl "$AI_REVIEW_BASE_URL" \
+            --arg model "$AI_REVIEW_MODEL" \
+            '{
+              "$schema": "https://pi.dev/schemas/models.schema.json",
+              providers: {
+                "ai-review": {
+                  name: "AI Review Endpoint",
+                  baseUrl: $baseUrl,
+                  api: "openai-completions",
+                  authHeader: true,
+                  models: [
+                    {
+                      id: $model,
+                      name: $model,
+                      reasoning: true,
+                      contextWindow: 1000000,
+                      maxTokens: 16384
+                    }
+                  ]
+                }
+              }
+            }' > "$PI_CODING_AGENT_DIR/models.json"
+          # 防线自校验：models.json 损坏会让 pi 启动即失败，与其留一个
+          # 难懂的报错不如在这里显式拦住
+          jq -e '.providers["ai-review"].models[0].id == "'"$AI_REVIEW_MODEL"'"' "$PI_CODING_AGENT_DIR/models.json" > /dev/null || {
+            echo "::error::models.json generation failed validation"
+            exit 1
+          }
+
+      - name: Run AI review
+        id: review
+        env:
+          # 密钥经 --api-key 进程参数注入 pi，不写入任何文件
+          AI_REVIEW_API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
+          # 关闭遥测与版本检查请求，避免 CI 里出现无关出网流量
+          PI_TELEMETRY: "0"
+          PI_SKIP_VERSION_CHECK: "1"
+        run: |
+          set +e
+          # 拼装最终 prompt = 仓库版审查标准 [+ 上一轮结论]
+          {
+            cat ai-review-prompt.md
+            if [ -s "$RUNNER_TEMP/prev-review.md" ]; then
+              printf '\n<上一轮审查结论>\n\n'
+              cat "$RUNNER_TEMP/prev-review.md"
+              printf '\n\n</上一轮审查结论>\n'
+            fi
+          } > ai-review-prompt.final.md
+          timeout 900 pi --print \
+            --provider ai-review --model "$AI_REVIEW_MODEL" \
+            --api-key "$AI_REVIEW_API_KEY" \
+            --thinking off \
+            --tools read,grep,find,ls \
+            --exclude-tools 'mcp__*' \
+            --no-mcp --no-extensions --no-skills --no-prompt-templates \
+            --no-context-files --no-session --no-approve \
+            -e "$RUNNER_TEMP/ai-review-guard.ts" \
+            "$(cat ai-review-prompt.final.md)" \
+            < pr.diff > review.raw.md 2> review.stderr
+          code=$?
+          set -e
+          # 思考链以 <think> 标签内联在 content 里返回（--thinking off 只缩短、
+          # 不消除），必须剥掉再发评论——否则报告开头会带一大段模型独白。
+          # perl 多字节安全地跨行剥离；剥完若全文为空说明模型只吐了思考链，按失败处理
+          perl -0777 -pe 's/<think>.*?<\/think>//gs' review.raw.md | sed -e '/./,$!d' > report.md
+          status=failed
+          if [ "$code" -eq 0 ] && [ -s report.md ]; then
+            # GitHub 评论上限 64KB：超长截断，避免"审查成功但发评论失败"
+            # 导致整个 job 报错、PR 一条评论都没有。iconv -c 丢弃截断点
+            # 可能劈开的半个多字节字符，保证输出仍是合法 UTF-8
+            if [ "$(wc -c < report.md)" -gt 60000 ]; then
+              head -c 60000 report.md | iconv -c -f UTF-8 -t UTF-8 > report.trunc && mv report.trunc report.md
+              printf '\n\n> ⚠️ 报告超过 60KB，已截断。\n' >> report.md
+            fi
+            status=ok
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Post review
+        # 残余风险声明：report 是模型输出、原样发布——被审 diff 中的注入
+        # 指令仍可能诱导报告措辞（缓解：只读工具、上下文清洗、guard 扩展
+        # 拦截 /proc 读；advisory 定位下接受该残余风险），评论头带 head SHA 便于归因
+        if: steps.review.outputs.status == 'ok'
+        env:
+          GH_TOKEN: ${{ secrets.GEVINYU_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          MODE: ${{ steps.diff.outputs.mode }}
+          REVIEWED_SHA: ${{ steps.refs.outputs.head }}
+        run: |
+          {
+            # 头部前缀取自 job 级 env，与 Resolve previous AI review 的过滤
+            # 条件同源。两处字面量各写一份时，改措辞会让过滤静默失配。
+            echo "${AI_REVIEW_HEADER_PREFIX}（advisory，非阻塞）"
+            echo
+            echo "> 被审查的 head：\`$REVIEWED_SHA\`"
+            echo
+            if [ "$MODE" = "core-only" ]; then
+              echo "> ⚠️ diff 超过 ${MAX_DIFF_LINES} 行，本次仅审查核心目录（internal、cmd、依赖清单、CI 工作流与构建脚本），其余变更未覆盖。"
+              echo
+            elif [ "$MODE" = "truncated" ]; then
+              echo "> ⚠️ diff 超过 ${MAX_DIFF_LINES} 行，超出部分被截断，审查可能不完整。"
+              echo
+            fi
+            cat report.md
+          } > comment.md
+          # 发**正式 review**（event=COMMENT）：时间线里显示为「gevinyu left a comment」，
+          # 带「View reviewed changes」入口。COMMENTED 不计入 mergeability，
+          # 审查只提供信息，不构成合并门禁。
+          jq -n --rawfile body comment.md '{body: $body, event: "COMMENT"}' > review-payload.json
+          gh api --method POST "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" \
+            --input review-payload.json --jq '{id,state,user:.user.login,html_url}'
+
+      - name: Post failure notice
+        if: steps.review.outputs.status == 'failed'
+        env:
+          GH_TOKEN: ${{ secrets.GEVINYU_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: gh api --method POST "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+          --raw-field body='AI 审查失败，详见 Actions 日志。'
+
+      - name: Post failure notice for unexpected errors
+        # 覆盖 review 步骤之外的失败（检出、merge-base、护栏等基础设施
+        # 错误），否则只留红叉、PR 侧无任何说明。排除并发取消：
+        # 连续 push 时被取消的在途运行不得发评论刷屏。
+        if: failure() && !cancelled() && steps.review.outputs.status != 'failed'
+        env:
+          GH_TOKEN: ${{ secrets.GEVINYU_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REVIEW_STATUS: ${{ steps.review.outputs.status }}
+        run: |
+          # 区分措辞：审查成功但发布瞬时失败 ≠ 审查本身失败，避免误导
+          if [ "$REVIEW_STATUS" = "ok" ]; then
+            gh api --method POST "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+              --raw-field body='AI 审查已完成，但结果发布失败；可在 Actions 对本次运行点 Re-run 重试发布。'
+          else
+            gh api --method POST "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+              --raw-field body='AI 审查失败，详见 Actions 日志。'
+          fi
+
+      - name: Mark job failed
+        if: steps.review.outputs.status == 'failed'
+        run: |
+          echo "::error::AI review did not complete (timeout or non-success result), see steps above."
+          exit 1
