@@ -296,6 +296,7 @@ func (m *WorkbenchModel) ConfirmPreview() {
 	m.Preview = nil
 	id, ctx := m.beginOperation()
 	workspaceID := m.Workspace.ID
+	m.Receipt = nil
 	m.Phase = PhaseWriting
 	m.Problem = nil
 	m.Async(func() {

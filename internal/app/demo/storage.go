@@ -140,6 +140,7 @@ func (s *StorageService) ApplyMigration(ctx context.Context, workspaceID, planID
 	base := workspace.Revision
 	workspace.StorageVersion = 2
 	workspace.Summary.Manifest.Version = 2
+	workspace.Summary.Settings.MigrationStatus = "Migrated v1 → v2; profiles preserved"
 	workspace.Revision++
 	receipt := s.writeReceipt(workspace, base, preview.migration.Changes)
 	delete(s.previews, planID)

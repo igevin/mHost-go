@@ -113,6 +113,9 @@ func TestWorkbenchMigrationPreviewCancelAndApply(t *testing.T) {
 	if model.Workspace.StorageVersion != 2 || model.Receipt == nil {
 		t.Fatalf("migration workspace/receipt = %+v/%+v", model.Workspace, model.Receipt)
 	}
+	if len(model.Workspace.Summary.Profiles) != 1 || model.Workspace.Summary.Settings.MigrationStatus != "Migrated v1 → v2; profiles preserved" {
+		t.Fatalf("migration did not preserve and explain the v1 dataset: %+v", model.Workspace.Summary)
+	}
 	for _, result := range model.Receipt.Results {
 		if result.Status == app.WriteFailed || !result.ReadbackVerified {
 			t.Fatalf("unverified migration result = %+v", result)
@@ -347,6 +350,25 @@ func TestWorkbenchDemoPathDoesNotInferVersionFromSubstring(t *testing.T) {
 	model.OpenSource()
 	if model.Workspace.StorageVersion != 2 || len(model.Workspace.Summary.Issues) != 0 {
 		t.Fatalf("substring path produced misleading demo data: %+v", model.Workspace)
+	}
+}
+
+// UI-020.
+func TestWorkbenchWriteFailureClearsPreviousReceipt(t *testing.T) {
+	base := demo.NewStorageService()
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(base, picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-old-receipt")
+	model.PreviewValidationChanges()
+	model.ConfirmPreview()
+	if model.Receipt == nil {
+		t.Fatal("successful write did not create a receipt")
+	}
+	model.Service = saveFailureService{StorageService: base, err: &app.UIError{Kind: app.ErrorStale, Message: "Preview expired"}}
+	model.PreviewValidationChanges()
+	model.ConfirmPreview()
+	if model.Receipt != nil {
+		t.Fatalf("failed write kept the previous successful receipt: %+v", model.Receipt)
 	}
 }
 

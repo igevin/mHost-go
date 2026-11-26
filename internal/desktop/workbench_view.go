@@ -142,6 +142,7 @@ func (m *WorkbenchModel) overviewView(c *ui.Context) {
 		if m.SummaryStale {
 			ui.Text(c, "May be stale. Reload successfully before any write operation.").Bold()
 		}
+		ui.Text(c, "Settings migration: "+summary.Settings.MigrationStatus).FontSize(12).TextColor(theme.TextMuted)
 		if len(summary.Issues) != 0 {
 			ui.Text(c, fmt.Sprintf("Loaded with %d issues. Valid data remains available.", len(summary.Issues))).Bold()
 		} else {
