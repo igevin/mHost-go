@@ -105,9 +105,12 @@ env:
 
 jobs:
   ai-review:
-    # fork PR 在 pull_request 触发下拿不到 secrets——这是 GitHub 平台按 PR
-    # 的 fork 属性在服务端扣住的，本行跳过是第一层（少跑一次注定无果的 job）；
-    # 手动触发不受限。
+    # fork PR 跳过：pull_request_target 下 workflow 定义来自 base（可信），
+    # fork PR 实际上**能**拿到 secrets——正因如此更要谨慎。跳过是因为
+    # GEVINYU_TOKEN 是个人 repo scope 的 PAT，让外部作者的 PR 触发一次
+    # 带它的审查，密钥暴露面不值得。审查是 advisory 的，少审一个 fork PR
+    # 无损，泄一个 PAT 则是真损失。
+    # 手动触发不受此限（由发起人自己负责选择 PR）。
     # 判空必须显式：GitHub 表达式做宽松相等，比较时 null 归一为数字 0，
     # 因此 null == false 与 null != true 都判真——head.repo 为 null（如
     # fork 被删除后的后续事件）时会放行，需先判 head.repo != null。
@@ -176,8 +179,11 @@ jobs:
         if: steps.gate.outputs.skip == 'false'
         uses: actions/setup-node@v7
         with:
-          # Pi 要求 Node ≥ 22.19
-          node-version: 22
+          # Pi 要求 Node ≥ 22.19（package.json 的 engines.node）。写 '22' 也能
+          # 拿到最新 22.x，但那是隐式依赖——这里写成显式区间，语义不会随
+          # setup-node 的解析行为漂移。npm 对 engines 不匹配默认只警告不报错，
+          # 装得上不代表跑得起来。
+          node-version: '>=22.19.0 <23'
 
       - name: Install Pi
         if: steps.gate.outputs.skip == 'false'
