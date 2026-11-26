@@ -40,7 +40,7 @@
 - **源码**：[`src/components/DnsProfileView.tsx`](https://github.com/igevin/mHost/blob/ef1502e83a179e0b9b104a4246fe7f3c5d8f6e39/src/components/DnsProfileView.tsx)、[`src-tauri/src/commands/dns.rs`](https://github.com/igevin/mHost/blob/ef1502e83a179e0b9b104a4246fe7f3c5d8f6e39/src-tauri/src/commands/dns.rs)、[`mhost-dns/src/platform.rs`](https://github.com/igevin/mHost/blob/ef1502e83a179e0b9b104a4246fe7f3c5d8f6e39/src-tauri/crates/mhost-dns/src/platform.rs)、[`proxy.rs`](https://github.com/igevin/mHost/blob/ef1502e83a179e0b9b104a4246fe7f3c5d8f6e39/src-tauri/crates/mhost-dns/src/proxy.rs)。
 - **已有测试**：`src/stores/__tests__/dns.test.ts`、`DnsProfileList.test.tsx`、`StatusBar.test.tsx`；`dns.rs`、`platform.rs`、`proxy.rs`、`server.rs` 内测试。
 - **兼容与安全**：区分 Manual 与 DhcpEmpty，接受旧数组和 `["Empty"]`；过滤原快照中的 loopback；先持久化恢复信息再改系统；接口白名单、IP 校验、进程身份校验、恢复后读回验证和 marker 保留是硬边界。
-- **初步结论**：安全目标对齐，但 Go 原型按 #2 要求直接用 argv 调用 `networksetup`，不复制源项目的 shell 字符串拼接。Phase 0 只验证最小生命周期，不迁移完整 resolver 和网络切换矩阵。
+- **初步结论**：安全目标对齐。Go 原型的 `networksetup` 读操作直接用 argv；写操作经过白名单/IP 校验和安全 quoting 后通过管理员权限的 `osascript` 执行，不复制源项目未校验的 shell 字符串拼接。Phase 0 只验证最小生命周期，不迁移完整 resolver 和网络切换矩阵。
 - **交互观察**：DNS 内存状态与 OS 状态可能分离；后续应把“应用认为已开启”和“系统实际指向”合并成可理解的状态与恢复引导，而不是只显示开关。
 
 ## 5. 广告屏蔽

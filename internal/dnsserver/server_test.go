@@ -71,6 +71,13 @@ func TestServer_CloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestServer_CloseAllowsNilAfterStartupFailure(t *testing.T) {
+	var server *Server
+	if err := server.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStart_RejectsNonLoopbackListener(t *testing.T) {
 	if _, err := Start("0.0.0.0:0"); err == nil {
 		t.Fatal("expected non-loopback listener to be rejected")

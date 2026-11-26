@@ -116,6 +116,10 @@ func scanSnapshots(root string, report *Report) {
 		return
 	}
 	for _, meta := range index.Snapshots {
+		if !validUUID(meta.ID) {
+			addIssue(report, filepath.Join(dir, "index.json"), fmt.Errorf("invalid snapshot id %q", meta.ID))
+			continue
+		}
 		var snapshot Snapshot
 		if readJSON(filepath.Join(dir, meta.ID+".json"), &snapshot, false, report) {
 			report.SnapshotCount++

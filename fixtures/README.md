@@ -7,7 +7,7 @@
 - `storage/v2-legacy-empty`：旧 `original_dns: []`，应解释为 DHCP/Empty。
 - `storage/v2-legacy-placeholder`：旧 `original_dns: ["Empty"]`，应解释为 DHCP/Empty。
 - `storage/v2-legacy-filtered`：旧数组混有 loopback，应过滤后保留公网 DNS。
-- `storage/v2-tagged-dhcp`：新 `{"kind":"dhcp_empty"}` 表示。
+- `storage/v2-tagged-dhcp`：新 `{"kind":"dhcp_empty"}` 表示；tagged manual 仅含 loopback 时同样降级为 DHCP/Empty（由单元测试覆盖）。
 - `storage/mixed-invalid`：一个有效 Profile 与损坏 JSON、缺字段、错类型文件并存，用于验证逐文件错误。
 - `hosts/sample.hosts`：编辑器与诊断的小型合成文本。
 

@@ -30,9 +30,10 @@ type Manager struct {
 	dns      SystemDNS
 	launcher ProxyLauncher
 
-	mu      sync.Mutex
-	process ProxyProcess
-	errors  chan error
+	operation sync.Mutex
+	mu        sync.Mutex
+	process   ProxyProcess
+	errors    chan error
 }
 
 func NewManager(store Store, dns SystemDNS, launcher ProxyLauncher) *Manager {
@@ -50,9 +51,9 @@ func (m *Manager) Running() bool {
 }
 
 func (m *Manager) Start(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.process != nil {
+	m.operation.Lock()
+	defer m.operation.Unlock()
+	if m.Running() {
 		return fmt.Errorf("DNS proxy is already running")
 	}
 	if err := m.recoverLocked(ctx); err != nil {
@@ -76,11 +77,15 @@ func (m *Manager) Start(ctx context.Context) error {
 		recoveryErr := m.restorePendingWithPolicyLocked(ctx, staleErr == nil)
 		return errors.Join(fmt.Errorf("start DNS proxy: %w", err), staleErr, recoveryErr)
 	}
+	m.mu.Lock()
 	m.process = process
+	m.mu.Unlock()
 	loopback := DNSState{Service: original.Service, Kind: KindManual, Servers: []string{"127.0.0.1"}}
 	if err := m.dns.Set(ctx, loopback); err != nil {
 		stopErr := process.Stop(context.Background())
+		m.mu.Lock()
 		m.process = nil
+		m.mu.Unlock()
 		recoveryErr := m.restorePendingWithPolicyLocked(context.Background(), stopErr == nil)
 		return errors.Join(fmt.Errorf("point system DNS at proxy: %w", err), stopErr, recoveryErr)
 	}
@@ -89,12 +94,14 @@ func (m *Manager) Start(ctx context.Context) error {
 }
 
 func (m *Manager) Stop(ctx context.Context) error {
+	m.operation.Lock()
+	defer m.operation.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	process := m.process
+	m.process = nil
+	m.mu.Unlock()
 	var stopErr error
-	if m.process != nil {
-		process := m.process
-		m.process = nil
+	if process != nil {
 		stopErr = process.Stop(ctx)
 		if stopErr != nil {
 			stopErr = fmt.Errorf("stop DNS proxy: %w", stopErr)
@@ -104,8 +111,8 @@ func (m *Manager) Stop(ctx context.Context) error {
 }
 
 func (m *Manager) Recover(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.operation.Lock()
+	defer m.operation.Unlock()
 	return m.recoverLocked(ctx)
 }
 
@@ -125,12 +132,15 @@ func (m *Manager) recoverLocked(ctx context.Context) error {
 
 func (m *Manager) monitor(process ProxyProcess) {
 	waitErr := process.Wait()
+	m.operation.Lock()
+	defer m.operation.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.process != process {
+		m.mu.Unlock()
 		return
 	}
 	m.process = nil
+	m.mu.Unlock()
 	recoveryErr := m.restorePendingLocked(context.Background())
 	if waitErr == nil {
 		waitErr = errors.New("DNS proxy exited unexpectedly")

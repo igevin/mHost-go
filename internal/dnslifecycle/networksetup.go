@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"time"
 )
 
 type CommandRunner interface {
@@ -12,18 +13,21 @@ type CommandRunner interface {
 }
 
 type NetworkSetup struct {
-	runner CommandRunner
+	runner         CommandRunner
+	commandTimeout time.Duration
 }
 
 func NewNetworkSetup() *NetworkSetup {
-	return &NetworkSetup{runner: newSystemRunner()}
+	return &NetworkSetup{runner: newSystemRunner(), commandTimeout: 15 * time.Second}
 }
 
 func NewNetworkSetupWithRunner(runner CommandRunner) *NetworkSetup {
-	return &NetworkSetup{runner: runner}
+	return &NetworkSetup{runner: runner, commandTimeout: 15 * time.Second}
 }
 
 func (n *NetworkSetup) Capture(ctx context.Context) (DNSState, error) {
+	ctx, cancel := n.withTimeout(ctx)
+	defer cancel()
 	service, err := n.activeService(ctx)
 	if err != nil {
 		return DNSState{}, err
@@ -50,6 +54,8 @@ func (n *NetworkSetup) Capture(ctx context.Context) (DNSState, error) {
 }
 
 func (n *NetworkSetup) Set(ctx context.Context, state DNSState) error {
+	ctx, cancel := n.withTimeout(ctx)
+	defer cancel()
 	if err := validateService(state.Service); err != nil {
 		return err
 	}
@@ -73,13 +79,16 @@ func (n *NetworkSetup) Set(ctx context.Context, state DNSState) error {
 	if n.runner == nil {
 		return fmt.Errorf("networksetup is only supported on macOS")
 	}
-	if _, err := n.runner.Run(ctx, "networksetup", arguments...); err != nil {
-		return fmt.Errorf("networksetup %s: %w", arguments[0], err)
+	script := administratorScript(shellCommand("networksetup", arguments...))
+	if _, err := n.runner.Run(ctx, "/usr/bin/osascript", "-e", script); err != nil {
+		return fmt.Errorf("privileged networksetup %s: %w", arguments[0], err)
 	}
 	return nil
 }
 
 func (n *NetworkSetup) Current(ctx context.Context, service string) (DNSState, error) {
+	ctx, cancel := n.withTimeout(ctx)
+	defer cancel()
 	if err := validateService(service); err != nil {
 		return DNSState{}, err
 	}
@@ -145,6 +154,14 @@ func (n *NetworkSetup) readServers(ctx context.Context, service string) ([]strin
 		servers = append(servers, server)
 	}
 	return servers, nil
+}
+
+func (n *NetworkSetup) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := n.commandTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func hardwarePortForDevice(output, device string) string {

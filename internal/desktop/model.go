@@ -18,14 +18,15 @@ type DNSManager interface {
 }
 
 type Model struct {
-	Selected     string
-	Editor       *editor.State
-	DNS          DNSManager
-	DialogOpen   bool
-	DNSStatus    string
-	EditorNotice string
-	OnDNSStart   func()
-	OnDNSStop    func()
+	Selected            string
+	Editor              *editor.State
+	DNS                 DNSManager
+	DNSServiceAvailable bool
+	DialogOpen          bool
+	DNSStatus           string
+	EditorNotice        string
+	OnDNSStart          func()
+	OnDNSStop           func()
 
 	findBar           *editor.FindBar
 	diagnosticVersion uint64
@@ -41,9 +42,10 @@ func NewModel(text string, dns DNSManager) *Model {
 			Label:          "Hosts editor",
 			KeepScrollbars: true,
 		},
-		DNS:               dns,
-		DNSStatus:         "DNS test is stopped",
-		diagnosticVersion: ^uint64(0),
+		DNS:                 dns,
+		DNSServiceAvailable: true,
+		DNSStatus:           "DNS test is stopped",
+		diagnosticVersion:   ^uint64(0),
 	}
 }
 
@@ -118,10 +120,10 @@ func (m *Model) dnsView(c *ui.Context) {
 		ui.Text(c, "Use a dedicated Mac. Starting requires administrator authorization and temporarily changes the active service DNS.").TextColor(theme.TextMuted)
 		ui.Text(c, m.DNSStatus).FontSize(14)
 		ui.Row(c).Gap(10).Children(func() {
-			if ui.PrimaryButton(c, "Start DNS Test").Disabled(m.DNS == nil || m.DNS.Running()).Clicked() && m.OnDNSStart != nil {
+			if ui.PrimaryButton(c, "Start DNS Test").Disabled(m.DNS == nil || !m.DNSServiceAvailable || m.DNS.Running()).Clicked() && m.OnDNSStart != nil {
 				m.OnDNSStart()
 			}
-			if ui.Button(c, "Stop DNS Test").Disabled(m.DNS == nil || !m.DNS.Running()).Clicked() && m.OnDNSStop != nil {
+			if ui.Button(c, "Stop DNS Test").Disabled(m.DNS == nil || !m.DNSServiceAvailable || !m.DNS.Running()).Clicked() && m.OnDNSStop != nil {
 				m.OnDNSStop()
 			}
 		})

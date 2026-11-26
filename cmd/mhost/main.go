@@ -40,7 +40,7 @@ func main() {
 	model := desktop.NewModel(initialHosts, manager)
 	server, err := dnsserver.Start("127.0.0.1:1053")
 	if err != nil {
-		model.DNS = nil
+		model.DNSServiceAvailable = false
 		model.DNSStatus = "DNS service unavailable: " + err.Error()
 	}
 	if err := manager.Recover(context.Background()); err != nil {

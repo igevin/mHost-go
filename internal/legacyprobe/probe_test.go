@@ -118,6 +118,41 @@ func TestScan_MixedInvalidReportsEveryFileAndContinues(t *testing.T) {
 	}
 }
 
+func TestOriginalDNS_TaggedLoopbackOnlyFallsBackToDHCP(t *testing.T) {
+	var state OriginalDNS
+	if err := state.UnmarshalJSON([]byte(`{"kind":"manual","servers":["127.0.0.1","::1"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if state.Kind != OriginalDNSDHCPEmpty || len(state.Servers) != 0 {
+		t.Fatalf("original DNS = %+v", state)
+	}
+}
+
+func TestScan_RejectsSnapshotIDOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "snapshots"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	index := `{"version":1,"snapshots":[{"id":"../outside","name":"Outside","profile_count":0,"created_at":"2024-06-05T10:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(root, "snapshots", "index.json"), []byte(index), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := `{"id":"outside","name":"Outside","profiles":[],"created_at":"2024-06-05T10:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(root, "outside.json"), []byte(snapshot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SnapshotCount != 0 {
+		t.Fatalf("snapshot count = %d", report.SnapshotCount)
+	}
+	if len(report.Issues) != 1 || !strings.Contains(report.Issues[0].Message, "invalid snapshot id") {
+		t.Fatalf("issues = %+v", report.Issues)
+	}
+}
+
 func TestScan_DoesNotModifyInput(t *testing.T) {
 	root := fixtureRoot("v2-full")
 	before := hashTree(t, root)

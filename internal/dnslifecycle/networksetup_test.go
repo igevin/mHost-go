@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 type recordedCommand struct {
@@ -58,17 +60,59 @@ func TestNetworkSetup_CaptureDHCP(t *testing.T) {
 	}
 }
 
-func TestNetworkSetup_SetUsesDirectArgv(t *testing.T) {
+func TestNetworkSetup_SetUsesAdministratorPrivileges(t *testing.T) {
+	command := "'networksetup' '-setdnsservers' 'Wi-Fi' '1.1.1.1' '8.8.8.8'"
+	script := "do shell script " + strconv.Quote(command) + " with administrator privileges"
 	runner := &fakeRunner{responses: map[string]string{
-		"networksetup -setdnsservers Wi-Fi 1.1.1.1 8.8.8.8": "",
+		"/usr/bin/osascript -e " + script: "",
 	}}
 	dns := NewNetworkSetupWithRunner(runner)
 	if err := dns.Set(context.Background(), originalDNS); err != nil {
 		t.Fatal(err)
 	}
-	want := []recordedCommand{{name: "networksetup", args: []string{"-setdnsservers", "Wi-Fi", "1.1.1.1", "8.8.8.8"}}}
+	want := []recordedCommand{{name: "/usr/bin/osascript", args: []string{"-e", script}}}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("commands = %+v", runner.commands)
+	}
+}
+
+type blockingRunner struct{}
+
+func (blockingRunner) Run(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestNetworkSetup_OperationsHaveBoundedTimeout(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation func(*NetworkSetup) error
+	}{
+		{name: "capture", operation: func(dns *NetworkSetup) error {
+			_, err := dns.Capture(context.Background())
+			return err
+		}},
+		{name: "set", operation: func(dns *NetworkSetup) error {
+			return dns.Set(context.Background(), originalDNS)
+		}},
+		{name: "current", operation: func(dns *NetworkSetup) error {
+			_, err := dns.Current(context.Background(), "Wi-Fi")
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dns := NewNetworkSetupWithRunner(blockingRunner{})
+			dns.commandTimeout = 20 * time.Millisecond
+			started := time.Now()
+			err := tt.operation(dns)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error = %v", err)
+			}
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Fatalf("operation took %v", elapsed)
+			}
+		})
 	}
 }
 

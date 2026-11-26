@@ -3,6 +3,7 @@ package dnslifecycle
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -38,6 +39,18 @@ func proxyCommand(proxyPath, runtimeDir string) string {
 		arguments[index] = shellQuote(arguments[index])
 	}
 	return "nohup " + strings.Join(arguments, " ") + " >" + shellQuote(filepath.Join(runtimeDir, proxyLogFile)) + " 2>&1 & echo $!"
+}
+
+func administratorScript(command string) string {
+	return "do shell script " + strconv.Quote(command) + " with administrator privileges"
+}
+
+func shellCommand(name string, arguments ...string) string {
+	parts := append([]string{name}, arguments...)
+	for index := range parts {
+		parts[index] = shellQuote(parts[index])
+	}
+	return strings.Join(parts, " ")
 }
 
 func shellQuote(value string) string {

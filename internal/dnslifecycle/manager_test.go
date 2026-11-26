@@ -24,6 +24,8 @@ type fakeDNS struct {
 	setErr     error
 	currentErr error
 	setCalls   []DNSState
+	setStarted chan struct{}
+	setBlock   chan struct{}
 }
 
 func (f *fakeDNS) Capture(context.Context) (DNSState, error) {
@@ -33,6 +35,10 @@ func (f *fakeDNS) Capture(context.Context) (DNSState, error) {
 }
 
 func (f *fakeDNS) Set(_ context.Context, state DNSState) error {
+	if f.setBlock != nil && (len(state.Servers) != 1 || state.Servers[0] != "127.0.0.1") {
+		f.setStarted <- struct{}{}
+		<-f.setBlock
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.setCalls = append(f.setCalls, cloneState(state))
@@ -251,6 +257,38 @@ func TestManager_UnexpectedProxyExitTriggersRecovery(t *testing.T) {
 	default:
 		t.Fatal("proxy exit did not publish a lifecycle event")
 	}
+}
+
+func TestManager_RunningDoesNotBlockDuringUnexpectedRecovery(t *testing.T) {
+	dns := &fakeDNS{
+		capture:    originalDNS,
+		current:    originalDNS,
+		setStarted: make(chan struct{}, 1),
+		setBlock:   make(chan struct{}),
+	}
+	launcher := &fakeLauncher{}
+	manager, _ := newTestManager(t, dns, launcher)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var unblock sync.Once
+	unblockRecovery := func() { unblock.Do(func() { close(dns.setBlock) }) }
+	defer unblockRecovery()
+
+	launcher.process.exit(errors.New("proxy crashed"))
+	select {
+	case <-dns.setStarted:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not start")
+	}
+	running := make(chan bool, 1)
+	go func() { running <- manager.Running() }()
+	select {
+	case <-running:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Running blocked behind DNS recovery")
+	}
+	unblockRecovery()
 }
 
 func TestManager_RecoverAfterApplicationKill(t *testing.T) {

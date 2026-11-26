@@ -32,7 +32,7 @@ func (l *OSProxyLauncher) Start(ctx context.Context) (ProxyProcess, error) {
 			return nil, fmt.Errorf("clear stale proxy %s: %w", name, err)
 		}
 	}
-	script := "do shell script " + strconv.Quote(proxyCommand(l.proxyPath, l.runtimeDir)) + " with administrator privileges"
+	script := administratorScript(proxyCommand(l.proxyPath, l.runtimeDir))
 	output, err := exec.CommandContext(ctx, "/usr/bin/osascript", "-e", script).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("authorize DNS proxy: %w: %s", err, output)
@@ -114,28 +114,33 @@ func (p *OSProxyProcess) Wait() error {
 }
 
 func (p *OSProxyProcess) Stop(ctx context.Context) error {
-	if !processExists(p.pid) {
-		p.launcher.cleanup()
-		return nil
-	}
-	if err := writePrivateFile(p.launcher.path(proxyShutdownFile), []byte("stop\n")); err != nil {
-		return fmt.Errorf("write proxy shutdown signal: %w", err)
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if !processExists(p.pid) {
-			p.launcher.cleanup()
+	err := stopWithEscalation(
+		ctx,
+		p.pid,
+		func() bool { return processExists(p.pid) },
+		func() error {
+			if err := writePrivateFile(p.launcher.path(proxyShutdownFile), []byte("stop\n")); err != nil {
+				return fmt.Errorf("write proxy shutdown signal: %w", err)
+			}
 			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("proxy pid %d did not stop: %w", p.pid, ctx.Err())
-		case <-ticker.C:
-		}
+		},
+		func(signal string) error { return p.signal(ctx, signal) },
+		5*time.Second,
+	)
+	if err != nil {
+		return err
 	}
+	p.launcher.cleanup()
+	return nil
+}
+
+func (p *OSProxyProcess) signal(ctx context.Context, signal string) error {
+	command := fmt.Sprintf("/bin/kill -%s %d", signal, p.pid)
+	output, err := exec.CommandContext(ctx, "/usr/bin/osascript", "-e", administratorScript(command)).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("authorize proxy signal: %w: %s", err, output)
+	}
+	return nil
 }
 
 func (l *OSProxyLauncher) cleanup() {

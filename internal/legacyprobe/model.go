@@ -75,8 +75,14 @@ func (d *OriginalDNS) UnmarshalJSON(data []byte) error {
 			if err := json.Unmarshal(serversRaw, &servers); err != nil {
 				return fmt.Errorf("decode original_dns.servers: %w", err)
 			}
+			servers = filterLocalResolvers(servers)
+			if len(servers) == 0 {
+				d.Kind = OriginalDNSDHCPEmpty
+				d.Servers = nil
+				return nil
+			}
 			d.Kind = kind
-			d.Servers = filterLocalResolvers(servers)
+			d.Servers = servers
 			return nil
 		default:
 			return fmt.Errorf("unknown original_dns kind %q", kind)

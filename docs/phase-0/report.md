@@ -59,8 +59,17 @@
 - 缺失 `mode` 默认 Hosts；必要字段缺失、错误类型和损坏 JSON 按文件报告，不阻断其他有效 Profile。
 - `original_dns` 支持 tagged Manual/DHCP、旧空数组、`["Empty"]` 和 loopback 过滤。
 - 源项目设置实际使用 localStorage；`settings.json` 仅是探针合成视图，不是已确认的现有磁盘契约。
-- Go DNS 适配器按 #2 要求使用 argv 调用 `networksetup`，没有复制源项目的 shell 命令拼接；恢复必须读回验证后才清 marker。
+- Go DNS 适配器的 `networksetup` 读操作使用 argv；写操作先经过服务白名单和 IP 校验，再安全 quoting 并通过 `osascript ... with administrator privileges` 执行，不接受未校验的 shell 命令。所有系统 DNS 操作有 15 秒上限，恢复必须读回验证后才清 marker。
 - Phase 0 DNS 服务只应答 `phase0.test`，不包含正式上游 resolver、缓存、广告引擎或热加载。
+
+## Review 回归覆盖
+
+- DNS 写操作与 proxy 使用一致的管理员提权通道；Capture/Set/Current 均有有界超时。
+- proxy 优雅停止超时后依次升级为 SIGTERM、SIGKILL；生命周期操作锁不再阻塞 UI 的 `Running()` 状态读取。
+- 1053 端口占用导致 DNS server 启动失败时，退出不再发生 typed-nil panic，DNS 后端可用性独立表示。
+- tagged manual `original_dns` 过滤 loopback 后为空时降级为 DHCP/Empty。
+- snapshot 元数据 ID 必须通过 UUID 校验，不能越出只读探针根目录。
+- macOS CI 新增 `go test -race ./...` 约束。
 
 ## 真机结果
 
@@ -75,7 +84,7 @@
 
 ## 风险与后续影响
 
-1. **真实权限链路仍待验证**：osascript 提权、root proxy readiness、用户态停止和 `networksetup` 写权限必须在目标 macOS 上验证。
+1. **真实权限链路仍待验证**：proxy 与 DNS 写操作的 osascript 提权、root proxy readiness、优雅停止及 SIGTERM/SIGKILL 升级必须在目标 macOS 上验证。
 2. **活动服务白名单是有意的 Phase 0 限制**：非白名单服务会安全失败；完整网络/DHCP/授权矩阵留到后续阶段。
 3. **UI 不是最终设计**：当前 Sidebar 和 DNS Lab 用于技术验证，进入 #5 前先评审关键页面和核心交互。
 4. **无长期 fork 决定**：目前无需 fork；如果真机发现框架缺陷，先评估边界明确的应用层 workaround，再更新继续/调整/停止结论。

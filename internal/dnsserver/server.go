@@ -36,6 +36,9 @@ func (s *Server) Addr() string {
 }
 
 func (s *Server) Close() error {
+	if s == nil {
+		return nil
+	}
 	s.closeOnce.Do(func() {
 		s.closeErr = s.connection.Close()
 		s.workers.Wait()

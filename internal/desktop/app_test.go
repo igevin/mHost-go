@@ -3,6 +3,8 @@ package desktop
 import (
 	"context"
 	"testing"
+
+	"github.com/igevin/mHost-go/internal/dnsserver"
 )
 
 type fakeDNSManager struct {
@@ -48,6 +50,14 @@ func TestApp_CleanupIsIdempotent(t *testing.T) {
 	app.Cleanup()
 	if manager.stopCalls != 1 || server.closeCalls != 1 {
 		t.Fatalf("cleanup calls = stop %d, close %d", manager.stopCalls, server.closeCalls)
+	}
+}
+
+func TestApp_CleanupAllowsNilDNSServer(t *testing.T) {
+	var server *dnsserver.Server
+	app := NewApp(NewModel("", nil), nil, server)
+	if err := app.Cleanup(); err != nil {
+		t.Fatal(err)
 	}
 }
 

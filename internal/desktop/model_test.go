@@ -116,6 +116,18 @@ func TestModel_LoadLargeHostsAction(t *testing.T) {
 	}
 }
 
+func TestModel_DNSBackendAvailabilityIsSeparateFromManager(t *testing.T) {
+	manager := &fakeDNSManager{}
+	model := NewModel("", manager)
+	if !model.DNSServiceAvailable {
+		t.Fatal("new model DNS service is unavailable")
+	}
+	model.DNSServiceAvailable = false
+	if model.DNS != manager {
+		t.Fatal("backend failure removed the lifecycle manager")
+	}
+}
+
 func TestModel_AlertDialog(t *testing.T) {
 	model := testModel(t)
 	tester := ui.NewTester(model.View, 1100, 720)
