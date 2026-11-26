@@ -164,6 +164,46 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # ↓ 安装运行时必须排在 Checkout **之前**。
+      # npm 的配置优先级里，项目级 .npmrc（当前目录向上找到的第一个）
+      # 高于用户级与全局级配置。Checkout 之后 CWD 就是未信任的 PR 检出树，
+      # PR 里放一个 .npmrc（registry=https://attacker/）即可让 npm install -g
+      # 拉到伪造的 @earendil-works/pi-coding-agent；它的 bin/pi 会在
+      # "Run AI review" 步骤带着 AI_REVIEW_API_KEY 执行，再写 $GITHUB_PATH
+      # 劫持后续步骤的 gh，把 GEVINYU_TOKEN 一并带走。
+      # 把安装挪到检出之前 + 换目录 + 钉死 registry，三重保险。
+      - name: Setup Node
+        if: steps.gate.outputs.skip == 'false'
+        uses: actions/setup-node@v7
+        with:
+          # Pi 要求 Node ≥ 22.19
+          node-version: 22
+
+      - name: Install Pi
+        if: steps.gate.outputs.skip == 'false'
+        # --ignore-scripts 关闭依赖生命周期脚本（Pi 正常安装不需要），
+        # 缩小供应链执行面——但它挡不住「bin 被替换」：pi 仍由 npm 从
+        # registry 拉取，所以 registry 与工作目录才是关键。
+        run: |
+          # 换到仓库外的目录再装：npm 的项目级配置查找从 CWD 向上进行，
+          # $RUNNER_TEMP 里没有任何 PR 内容可利用
+          cd "$RUNNER_TEMP"
+          # 显式钉死 registry，并屏蔽用户级 npmrc——命令行配置优先级最高，
+          # 项目级 .npmrc 改不掉它。注意不要同时给 --globalconfig 同一个
+          # 文件：npm 会报 "double-loading config" 并直接退出。
+          # 全局级 npmrc 在 runner 上是受控的，威胁模型里不涉及。
+          npm install -g --ignore-scripts \
+            --registry=https://registry.npmjs.org \
+            --userconfig=/dev/null \
+            "@earendil-works/pi-coding-agent@${AI_REVIEW_PI_VERSION}"
+          # 自校验：装出来的是不是我们钉的那个版本。装错版本时 Pi 的 CLI
+          # 参数与 models.json schema 可能对不上，审查直接失败且原因难辨。
+          installed=$(pi --version | tr -d '[:space:]')
+          if [ "$installed" != "$AI_REVIEW_PI_VERSION" ]; then
+            echo "::error::pi version mismatch: expected $AI_REVIEW_PI_VERSION, got $installed"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -211,6 +251,11 @@ jobs:
           # --no-extensions/--no-approve/--no-context-files 等 flag 关闭
           # 全部项目资源发现，这里的删除是纵深防御。
           rm -rf .claude .mcp.json .pi
+          # 包管理器配置：项目级 .npmrc / .yarnrc 等能改写 registry 与脚本源，
+          # 落到 PR 检出树里就是投毒面。安装运行时已挪到 Checkout 之前完成
+          # （主防线），这里删除属于纵深防御。
+          rm -f .npmrc .yarnrc .yarnrc.yml .pnpmrc
+          find . -not -path './.git/*' -maxdepth 2 \( -name '.npmrc' -o -name '.yarnrc' -o -name '.yarnrc.yml' \) -delete 2>/dev/null || true
           # 项目约定文件同样只信 base 版本
           find . -not -path './.git/*' \( -name 'CLAUDE.md' -o -name 'CLAUDE.local.md' -o -name 'AGENTS.md' \) -delete
           git show "$BASE_TIP:CLAUDE.md" > CLAUDE.md 2>/dev/null || true
@@ -296,10 +341,15 @@ jobs:
           # 只认「本 workflow 发的、以横幅前缀开头、作者是 REVIEWER_LOGIN」的 review，
           # 不取任意用户评论，也不取本账号的人工 review。
           set +e
-          previous=$(timeout 90 gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" 2>/dev/null \
-            | jq -r --arg pfx "$AI_REVIEW_HEADER_PREFIX" --arg who "$REVIEWER_LOGIN" \
-                '[.[][] | select(.user.login == $who) | select(.body | startswith($pfx))] | last | .body // ""')
+          prev_json=$(timeout 90 gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" 2>/dev/null \
+            | jq -c --arg pfx "$AI_REVIEW_HEADER_PREFIX" --arg who "$REVIEWER_LOGIN" \
+                '[.[][] | select(.user.login == $who) | select(.body | startswith($pfx))] | last // {}')
           set -e
+          previous=$(printf '%s' "$prev_json" | jq -r '.body // ""')
+          # 上一轮的链接：已提交的 review 删不掉（API 只支持删 pending），
+          # 所以新评论里显式声明取代关系，避免时间线上一串同前缀评论让人分不清
+          # 哪条才是最新结论。
+          prev_url=$(printf '%s' "$prev_json" | jq -r '.html_url // ""')
           if [ -n "$previous" ]; then
             printf '%s' "$previous" | head -c 4000 | iconv -c -f UTF-8 -t UTF-8 > "$RUNNER_TEMP/prev-review.md" \
               || : > "$RUNNER_TEMP/prev-review.md"
@@ -307,19 +357,7 @@ jobs:
             : > "$RUNNER_TEMP/prev-review.md"
           fi
           echo "previous review bytes: $(wc -c < "$RUNNER_TEMP/prev-review.md" | tr -d ' ')"
-
-      - name: Setup Node
-        if: steps.gate.outputs.skip == 'false'
-        uses: actions/setup-node@v7
-        with:
-          # Pi 要求 Node ≥ 22.19
-          node-version: 22
-
-      - name: Install Pi
-        if: steps.gate.outputs.skip == 'false'
-        # 钉精确版本见 env.AI_REVIEW_PI_VERSION 的注释。--ignore-scripts 关闭
-        # 依赖生命周期脚本（Pi 正常安装不需要），缩小供应链执行面
-        run: npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${AI_REVIEW_PI_VERSION}"
+          echo "prev_url=$prev_url" >> "$GITHUB_OUTPUT"
 
       - name: Write models.json
         if: steps.gate.outputs.skip == 'false'
@@ -454,6 +492,7 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           MODE: ${{ steps.diff.outputs.mode }}
           TRUNCATED: ${{ steps.diff.outputs.truncated }}
+          PREV_URL: ${{ steps.prev.outputs.prev_url }}
           REVIEWED_SHA: ${{ steps.refs.outputs.head }}
         run: |
           {
@@ -463,6 +502,12 @@ jobs:
             echo
             echo "> 被审查的 head：\`$REVIEWED_SHA\`"
             echo
+            # 上一轮的 review 删不掉（GitHub API 只能删 pending 的），
+            # 显式声明取代关系，时间线上才分得清哪条是最新结论
+            if [ -n "$PREV_URL" ]; then
+              echo "> 本条取代上一轮审查：$PREV_URL"
+              echo
+            fi
             # 措辞 = 实际发生的事。截断与范围是两个独立维度，可能同时成立，
             # 所以分开写、各自只在真的成立时出现。
             if [ "$TRUNCATED" = "true" ]; then
