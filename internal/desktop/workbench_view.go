@@ -74,6 +74,12 @@ func (m *WorkbenchModel) View(c *ui.Context) {
 func (m *WorkbenchModel) emptyView(c *ui.Context) {
 	theme := c.Theme()
 	ui.Column(c).Grow(1).Center().Gap(12).Padding(32).Children(func() {
+		if m.QuitRequested {
+			ui.Text(c, "Quit is waiting for directory selection. Dismiss the native panel to continue.").Bold()
+			if ui.Button(c, "Cancel Quit").Clicked() {
+				m.CancelQuit()
+			}
+		}
 		if m.Phase == PhaseSelecting || m.Phase == PhaseLoading {
 			ui.Spinner(c)
 			ui.Text(c, m.phaseText()).FontSize(18).Bold()

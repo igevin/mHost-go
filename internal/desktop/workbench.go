@@ -99,6 +99,7 @@ func (m *WorkbenchModel) OpenSource() {
 				m.lastSourceRoot = path
 				m.Workspace = app.Workspace{}
 				m.SummaryStale = false
+				m.Preview = nil
 				m.Receipt = nil
 				m.Backups = []app.BackupRef{}
 				m.Phase = PhaseLoading
@@ -209,6 +210,7 @@ func (m *WorkbenchModel) CreateWorkspace() {
 		}
 		m.dispatch(func() {
 			if m.current(id) {
+				m.Preview = nil
 				m.Phase = PhaseCopying
 			}
 		})
@@ -290,7 +292,11 @@ func (m *WorkbenchModel) CancelPreview() {
 }
 
 func (m *WorkbenchModel) ConfirmPreview() {
-	if m.Preview == nil || m.busy() {
+	if m.Preview == nil || m.busy() || !m.writable() {
+		return
+	}
+	if m.previewWorkspaceID(*m.Preview) != m.Workspace.ID {
+		m.Preview = nil
 		return
 	}
 	preview := *m.Preview
@@ -327,6 +333,24 @@ func (m *WorkbenchModel) ConfirmPreview() {
 			m.refreshAfterWrite(id, ctx, workspaceID)
 		})
 	})
+}
+
+func (m *WorkbenchModel) previewWorkspaceID(preview PreviewState) string {
+	switch preview.Kind {
+	case PreviewMigrationKind:
+		if preview.Migration != nil {
+			return preview.Migration.WorkspaceID
+		}
+	case PreviewValidationKind:
+		if preview.Changes != nil {
+			return preview.Changes.WorkspaceID
+		}
+	case PreviewRestoreKind:
+		if preview.Backup != nil {
+			return preview.Backup.WorkspaceID
+		}
+	}
+	return ""
 }
 
 func (m *WorkbenchModel) refreshAfterWrite(id uint64, ctx context.Context, workspaceID string) {

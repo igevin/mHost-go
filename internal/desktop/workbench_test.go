@@ -412,6 +412,46 @@ func TestWorkbenchCloseSuppressesPickerCompletion(t *testing.T) {
 	}
 }
 
+// UI-012 and UI-017.
+func TestWorkbenchOpenSourceInvalidatesPreview(t *testing.T) {
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-old-preview")
+	model.PreviewValidationChanges()
+	if model.Preview == nil {
+		t.Fatal("preview was not opened")
+	}
+	picker.path = "/fixtures/v1-hosts"
+	model.OpenSource()
+	if model.Preview != nil {
+		t.Fatal("changing source retained a preview for the old workspace")
+	}
+	model.ConfirmPreview()
+	if model.Problem != nil || model.Receipt != nil {
+		t.Fatalf("invalid preview attempted a write: %+v/%+v", model.Problem, model.Receipt)
+	}
+}
+
+// UI-030.
+func TestWorkbenchInitialPickerQuitHasVisibleState(t *testing.T) {
+	model := newTestWorkbench(demo.NewStorageService(), &stubDirectoryPicker{})
+	model.Phase = PhaseSelecting
+	if model.RequestQuit() {
+		t.Fatal("picker did not defer quit")
+	}
+	tester := ui.NewTester(model.View, 1120, 760)
+	tester.Frame()
+	if !tester.HasText("Quit is waiting for directory selection") {
+		t.Fatalf("picker quit state is not visible: %q", tester.Texts())
+	}
+	if err := tester.Click("Cancel Quit"); err != nil {
+		t.Fatal(err)
+	}
+	if model.QuitRequested {
+		t.Fatal("cancel quit did not clear picker quit request")
+	}
+}
+
 // UI-030.
 func TestWorkbenchQuitWaitsForWriting(t *testing.T) {
 	model := newTestWorkbench(demo.NewStorageService(), &stubDirectoryPicker{})
