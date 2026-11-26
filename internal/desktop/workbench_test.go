@@ -184,6 +184,83 @@ func TestWorkbenchWriteFailureKeepsPartialReceipt(t *testing.T) {
 	}
 }
 
+// UI-006.
+func TestWorkbenchCancelReloadIgnoresLateResult(t *testing.T) {
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-cancel")
+	var tasks []func()
+	model.Async = func(fn func()) { tasks = append(tasks, fn) }
+	model.Reload()
+	if model.Phase != PhaseLoading || len(tasks) != 1 {
+		t.Fatalf("reload phase/tasks = %v/%d", model.Phase, len(tasks))
+	}
+	model.CancelOperation()
+	if model.Phase != PhaseReady {
+		t.Fatalf("cancel phase = %v", model.Phase)
+	}
+	tasks[0]()
+	if model.Phase != PhaseReady || model.Problem != nil {
+		t.Fatalf("late result changed canceled state: %v/%+v", model.Phase, model.Problem)
+	}
+}
+
+type retryInspectService struct {
+	app.StorageService
+	calls int
+}
+
+func (s *retryInspectService) Inspect(ctx context.Context, root string) (app.Workspace, error) {
+	s.calls++
+	if s.calls == 1 {
+		return app.Workspace{}, errors.New("temporary inspect failure")
+	}
+	return s.StorageService.Inspect(ctx, root)
+}
+
+// UI-005.
+func TestWorkbenchRetryFailedInspection(t *testing.T) {
+	service := &retryInspectService{StorageService: demo.NewStorageService()}
+	picker := &stubDirectoryPicker{path: "/fixtures/v2-full"}
+	model := newTestWorkbench(service, picker)
+	model.OpenSource()
+	if model.Phase != PhaseFailed {
+		t.Fatalf("initial failure phase = %v", model.Phase)
+	}
+	model.Retry()
+	if model.Phase != PhaseReady || service.calls != 2 || picker.calls != 1 {
+		t.Fatalf("retry phase/service calls/picker calls = %v/%d/%d", model.Phase, service.calls, picker.calls)
+	}
+}
+
+// UI-018.
+func TestWorkbenchReceiptRowsAreVisible(t *testing.T) {
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-receipt")
+	model.PreviewValidationChanges()
+	model.ConfirmPreview()
+	tester := ui.NewTester(model.View, 1120, 760)
+	tester.Frame()
+	if !tester.HasText("settings.json") || !tester.HasText("written") {
+		t.Fatalf("receipt rows are not rendered: %q", tester.Texts())
+	}
+	backupID := model.Receipt.Results[0].Backup.ID
+	if !tester.HasText(backupID) {
+		t.Fatalf("receipt backup %q is not rendered", backupID)
+	}
+}
+
+// Demo paths only select special datasets by exact fixture directory name.
+func TestWorkbenchDemoPathDoesNotInferVersionFromSubstring(t *testing.T) {
+	picker := &stubDirectoryPicker{path: "/tmp/v1-copy"}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	model.OpenSource()
+	if model.Workspace.StorageVersion != 2 || len(model.Workspace.Summary.Issues) != 0 {
+		t.Fatalf("substring path produced misleading demo data: %+v", model.Workspace)
+	}
+}
+
 // UI-030.
 func TestWorkbenchQuitWaitsForWriting(t *testing.T) {
 	model := newTestWorkbench(demo.NewStorageService(), &stubDirectoryPicker{})

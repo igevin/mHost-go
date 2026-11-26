@@ -3,6 +3,7 @@ package demo
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -292,9 +293,9 @@ func demoError(kind app.UIErrorKind, message string) *app.UIError {
 var demoTime = time.Date(2026, time.November, 26, 12, 0, 0, 0, time.UTC)
 
 func summaryFor(root string) app.StorageSummary {
-	lower := strings.ToLower(root)
+	dataset := strings.ToLower(filepath.Base(filepath.Clean(root)))
 	version := 2
-	if strings.Contains(lower, "v1") {
+	if dataset == "v1-hosts" {
 		version = 1
 	}
 	enabled := false
@@ -314,7 +315,7 @@ func summaryFor(root string) app.StorageSummary {
 		summary.Snapshots = []app.SnapshotSummary{}
 		summary.AdBlock = nil
 	}
-	if strings.Contains(lower, "mixed-invalid") {
+	if dataset == "mixed-invalid" {
 		summary.Profiles = summary.Profiles[:1]
 		summary.Issues = []app.StorageIssue{
 			{Code: "invalid_json", Severity: app.SeverityError, Path: "profiles/hosts/broken.json", Message: "Invalid JSON", Detail: "unexpected end of JSON input", Recoverable: true},

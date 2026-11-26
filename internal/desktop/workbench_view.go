@@ -86,8 +86,18 @@ func (m *WorkbenchModel) emptyView(c *ui.Context) {
 			}
 			ui.Text(c, "No directory is accessed until you choose one.").FontSize(12).TextColor(theme.TextMuted)
 		}
-		if m.Phase == PhaseFailed && m.Problem != nil && ui.Button(c, "Choose Another Source…").Clicked() {
-			m.OpenSource()
+		if m.Phase == PhaseLoading && ui.Button(c, "Cancel").Clicked() {
+			m.CancelOperation()
+		}
+		if m.Phase == PhaseFailed && m.Problem != nil {
+			ui.Row(c).Gap(10).Children(func() {
+				if ui.Button(c, "Retry").Clicked() {
+					m.Retry()
+				}
+				if ui.Button(c, "Choose Another Source…").Clicked() {
+					m.OpenSource()
+				}
+			})
 		}
 	})
 }
@@ -118,7 +128,7 @@ func (m *WorkbenchModel) workspaceHeader(c *ui.Context) {
 func (m *WorkbenchModel) overviewView(c *ui.Context) {
 	theme := c.Theme()
 	summary := m.Workspace.Summary
-	ui.Column(c).Gap(16).Children(func() {
+	ui.Column(c).Gap(16).Fill().Children(func() {
 		ui.Text(c, "Storage overview").FontSize(20).Bold()
 		if summary.Manifest != nil {
 			ui.Text(c, fmt.Sprintf("Manifest v%d · app %s · updated %s", summary.Manifest.Version, summary.Manifest.AppVersion, summary.Manifest.UpdatedAt.Format("2006-01-02 15:04 UTC")))
@@ -136,6 +146,19 @@ func (m *WorkbenchModel) overviewView(c *ui.Context) {
 		}
 		if m.Receipt != nil {
 			ui.Text(c, receiptSummary(*m.Receipt)).Bold()
+			results := m.Receipt.Results
+			ui.Table(c, &m.receiptRows, []ui.TableColumn{
+				{Title: "Entity", Width: 100}, {Title: "Path", Width: 260}, {Title: "Status", Width: 90},
+				{Title: "Readback", Width: 80}, {Title: "Backup"},
+			}, len(results), func(row, col int) {
+				result := results[row]
+				backupID := ""
+				if result.Backup != nil {
+					backupID = result.Backup.ID
+				}
+				values := []string{result.Entity, result.Path, string(result.Status), fmt.Sprint(result.ReadbackVerified), backupID}
+				ui.Text(c, values[col]).SingleLine()
+			}).Grow(1).FillWidth()
 		}
 	})
 }
@@ -177,7 +200,7 @@ func (m *WorkbenchModel) snapshotsView(c *ui.Context) {
 				}
 			})
 			for _, backup := range m.Backups {
-				ui.Text(c, fmt.Sprintf("%s · %s · %s", backup.Entity, backup.Path, backup.CreatedAt.Format("2006-01-02 15:04"))).FontSize(12).SingleLine()
+				ui.Text(c, fmt.Sprintf("%s · %s · %s · %s · %s", backup.ID, backup.Entity, backup.Path, backup.OperationID, backup.CreatedAt.Format("2006-01-02 15:04"))).FontSize(12).SingleLine()
 			}
 		}
 	})
@@ -223,6 +246,9 @@ func (m *WorkbenchModel) actionBar(c *ui.Context) {
 		ui.Column(c).Grow(1).Children(func() {
 			ui.Text(c, m.actionSafetyText()).FontSize(12).TextColor(theme.TextMuted)
 		})
+		if m.Phase == PhaseLoading && ui.Button(c, "Cancel").Clicked() {
+			m.CancelOperation()
+		}
 		if m.QuitRequested && ui.Button(c, "Cancel Quit").Clicked() {
 			m.CancelQuit()
 		}

@@ -56,12 +56,14 @@ type WorkbenchModel struct {
 	QuitRequested bool
 	OnSafeToQuit  func()
 
-	profileRows  ui.ListState
-	snapshotRows ui.ListState
-	issueRows    ui.ListState
-	operation    uint64
-	cancel       context.CancelFunc
-	closed       bool
+	profileRows    ui.ListState
+	snapshotRows   ui.ListState
+	issueRows      ui.ListState
+	receiptRows    ui.ListState
+	lastSourceRoot string
+	operation      uint64
+	cancel         context.CancelFunc
+	closed         bool
 }
 
 func NewWorkbenchModel(service app.StorageService, picker app.DirectoryPicker) *WorkbenchModel {
@@ -92,25 +94,30 @@ func (m *WorkbenchModel) OpenSource() {
 		}
 		m.Dispatch(func() {
 			if m.current(id) {
+				m.lastSourceRoot = path
 				m.Phase = PhaseLoading
 			}
 		})
-		workspace, err := m.Service.Inspect(ctx, path)
-		m.Dispatch(func() {
-			if !m.current(id) {
-				return
-			}
-			if err != nil {
-				m.setError("inspect", err)
-				return
-			}
-			m.Workspace = workspace
-			m.Phase = PhaseReady
-			m.SelectedTab = 0
-			m.Receipt = nil
-			m.Backups = []app.BackupRef{}
-			m.finishOperation()
-		})
+		m.inspect(ctx, id, path)
+	})
+}
+
+func (m *WorkbenchModel) inspect(ctx context.Context, id uint64, sourceRoot string) {
+	workspace, err := m.Service.Inspect(ctx, sourceRoot)
+	m.Dispatch(func() {
+		if !m.current(id) {
+			return
+		}
+		if err != nil {
+			m.setError("inspect", err)
+			return
+		}
+		m.Workspace = workspace
+		m.Phase = PhaseReady
+		m.SelectedTab = 0
+		m.Receipt = nil
+		m.Backups = []app.BackupRef{}
+		m.finishOperation()
 	})
 }
 
@@ -137,6 +144,43 @@ func (m *WorkbenchModel) Reload() {
 			m.finishOperation()
 		})
 	})
+}
+
+func (m *WorkbenchModel) CancelOperation() {
+	if m.Phase != PhaseLoading && m.Phase != PhasePreviewing {
+		return
+	}
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	m.operation++
+	m.Problem = nil
+	if m.Workspace.ID == "" {
+		m.Phase = PhaseEmpty
+	} else {
+		m.Phase = PhaseReady
+	}
+	m.finishOperation()
+}
+
+func (m *WorkbenchModel) Retry() {
+	if m.Problem == nil || m.busy() {
+		return
+	}
+	if m.Workspace.ID != "" {
+		m.Reload()
+		return
+	}
+	if m.lastSourceRoot == "" {
+		m.OpenSource()
+		return
+	}
+	id, ctx := m.beginOperation()
+	m.Phase = PhaseLoading
+	m.Problem = nil
+	sourceRoot := m.lastSourceRoot
+	m.Async(func() { m.inspect(ctx, id, sourceRoot) })
 }
 
 func (m *WorkbenchModel) CreateWorkspace() {
