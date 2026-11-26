@@ -294,6 +294,8 @@ func (m *WorkbenchModel) previewDialog(c *ui.Context) {
 		switch ui.AlertDialog(c, &open, "Preview v1 → v2 migration", message, "Apply Migration", "Cancel") {
 		case 0:
 			m.ConfirmPreview()
+		case 1:
+			m.CancelPreview()
 		default:
 			if !open {
 				m.CancelPreview()
@@ -304,6 +306,8 @@ func (m *WorkbenchModel) previewDialog(c *ui.Context) {
 		switch ui.AlertDialog(c, &open, "Preview validation changes", message, "Save to Working Copy", "Cancel") {
 		case 0:
 			m.ConfirmPreview()
+		case 1:
+			m.CancelPreview()
 		default:
 			if !open {
 				m.CancelPreview()
@@ -315,6 +319,8 @@ func (m *WorkbenchModel) previewDialog(c *ui.Context) {
 		switch ui.AlertDialog(c, &open, "Restore storage backup", message, "Restore Backup", "Cancel") {
 		case 0:
 			m.ConfirmPreview()
+		case 1:
+			m.CancelPreview()
 		default:
 			if !open {
 				m.CancelPreview()

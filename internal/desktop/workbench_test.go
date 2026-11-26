@@ -372,6 +372,46 @@ func TestWorkbenchWriteFailureClearsPreviousReceipt(t *testing.T) {
 	}
 }
 
+// UI-012 and UI-017.
+func TestWorkbenchPreviewCancelButtonCanReopen(t *testing.T) {
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-preview-cancel")
+	model.PreviewValidationChanges()
+	tester := ui.NewTester(model.View, 1120, 760)
+	if err := tester.Click("Cancel"); err != nil {
+		t.Fatal(err)
+	}
+	if model.Preview != nil {
+		t.Fatal("cancel button left the preview open")
+	}
+	model.PreviewValidationChanges()
+	if model.Preview == nil {
+		t.Fatal("preview could not be reopened after cancel")
+	}
+}
+
+// UI-029.
+func TestWorkbenchCloseSuppressesPickerCompletion(t *testing.T) {
+	picker := &stubDirectoryPicker{path: "/fixtures/v2-full"}
+	model := NewWorkbenchModel(demo.NewStorageService(), picker)
+	var tasks []func()
+	dispatchCalls := 0
+	model.Async = func(fn func()) { tasks = append(tasks, fn) }
+	model.Dispatch = func(fn func()) { dispatchCalls++; fn() }
+	model.OpenSource()
+	if len(tasks) != 1 {
+		t.Fatalf("picker tasks = %d", len(tasks))
+	}
+	if err := model.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tasks[0]()
+	if dispatchCalls != 0 || model.Workspace.ID != "" {
+		t.Fatalf("closed model dispatched picker completion: calls/workspace = %d/%+v", dispatchCalls, model.Workspace)
+	}
+}
+
 // UI-030.
 func TestWorkbenchQuitWaitsForWriting(t *testing.T) {
 	model := newTestWorkbench(demo.NewStorageService(), &stubDirectoryPicker{})

@@ -117,7 +117,7 @@ func (s *StorageService) PreviewMigration(ctx context.Context, workspaceID strin
 		ToVersion:    2,
 		Changes: []app.ChangeItem{
 			{Entity: "manifest", Path: "manifest.json", Summary: "Upgrade manifest from v1 to v2", RequiresBackup: true},
-			{Entity: "profiles", Path: "profiles/", Summary: "Preserve profiles and materialize v2 defaults", RequiresBackup: true},
+			{Entity: "profiles", Path: "profiles/", Summary: "Preserve the v1 profile and materialize v2 field defaults; do not invent v2-only data", RequiresBackup: true},
 		},
 	}
 	s.previews[plan.ID] = preview{id: plan.ID, workspaceID: workspaceID, revision: workspace.Revision, migration: &plan}
@@ -140,6 +140,7 @@ func (s *StorageService) ApplyMigration(ctx context.Context, workspaceID, planID
 	base := workspace.Revision
 	workspace.StorageVersion = 2
 	workspace.Summary.Manifest.Version = 2
+	workspace.Summary.Settings.Source = "Native settings (v2 defaults materialized)"
 	workspace.Summary.Settings.MigrationStatus = "Migrated v1 → v2; profiles preserved"
 	workspace.Revision++
 	receipt := s.writeReceipt(workspace, base, preview.migration.Changes)

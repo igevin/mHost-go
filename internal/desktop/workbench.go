@@ -413,7 +413,11 @@ func (m *WorkbenchModel) Close() error {
 	m.operation++
 	if m.cancel != nil {
 		m.cancel()
+		m.cancel = nil
 	}
+	m.Dispatch = func(func()) {}
+	m.Async = func(func()) {}
+	m.OnSafeToQuit = nil
 	return nil
 }
 
