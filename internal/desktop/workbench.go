@@ -504,6 +504,7 @@ func (m *WorkbenchModel) setError(operation string, err error) {
 		return
 	}
 	m.Problem = classifyUIError(operation, err)
+	m.QuitRequested = false
 	if m.Workspace.ID != "" && (operation == "reload" || operation == "write" || operation == "refresh_after_write") {
 		m.SummaryStale = true
 	}

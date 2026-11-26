@@ -432,6 +432,23 @@ func TestWorkbenchOpenSourceInvalidatesPreview(t *testing.T) {
 	}
 }
 
+// UI-031.
+func TestWorkbenchWriteFailureCancelsDeferredQuit(t *testing.T) {
+	base := demo.NewStorageService()
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(base, picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-failed-quit")
+	model.Service = saveFailureService{StorageService: base, err: &app.UIError{Kind: app.ErrorWrite, Message: "Write failed"}}
+	quitCalls := 0
+	model.OnSafeToQuit = func() { quitCalls++ }
+	model.PreviewValidationChanges()
+	model.QuitRequested = true
+	model.ConfirmPreview()
+	if model.QuitRequested || quitCalls != 0 || model.Problem == nil {
+		t.Fatalf("failed write continued quit: requested/calls/problem = %v/%d/%+v", model.QuitRequested, quitCalls, model.Problem)
+	}
+}
+
 // UI-030.
 func TestWorkbenchInitialPickerQuitHasVisibleState(t *testing.T) {
 	model := newTestWorkbench(demo.NewStorageService(), &stubDirectoryPicker{})

@@ -201,7 +201,7 @@ UI Model 至少保存：`phase`、当前 Workspace、Summary、选中 Tab、操�
 - `context.Canceled` 是取消，不显示为红色失败；原生 picker 的取消也不构成错误。
 - 读取和预览可取消。复制和写入一旦开始，UI 不提供“取消写入”；应用退出也不能绕过服务安全边界。
 - 普通 Close 始终可 Hide，后台状态保留；恢复窗口后显示最新操作状态。
-- 写入中 Cmd-Q/Tray Quit：阻止立即退出，显示 `Quit after the current storage operation` 和 `Cancel Quit`。操作结束并产生明确回执后再继续此前登记的 Quit。
+- 写入中 Cmd-Q/Tray Quit：阻止立即退出，显示 `Quit after the current storage operation` 和 `Cancel Quit`。操作成功并产生明确回执后再继续此前登记的 Quit；操作失败则取消延迟 Quit，保持应用打开以展示错误和部分回执，由用户确认后重新决定是否退出。
 - `OnQuitCanceled` 清除 `quitRequested`。多个退出入口不得并行执行清理或重复退出。
 
 ## 6. UI—应用服务契约

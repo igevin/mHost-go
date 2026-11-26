@@ -96,7 +96,7 @@
 | UI-028 | writing 中 Hide 再恢复 | 写操作继续且只执行一次，恢复后显示最新回执 | AC4 |
 | UI-029 | 无写入时触发窗口 Cmd-Q 与 Tray Quit | 清理只执行一次，取消中的读取不会晚到更新已退出 Model | AC4 |
 | UI-030 | writing 中触发两种 Quit，再 Cancel Quit | 先 PreventDefault；取消后 quitRequested 清除，页面仍可操作 | AC4、AC5 |
-| UI-031 | writing 中登记 Quit，操作成功/失败结束 | 到达安全边界并生成回执后才继续 Quit；清理一次，不启动第二个写操作 | AC4 |
+| UI-031 | writing 中登记 Quit，分别让操作成功/失败结束 | 成功到达安全边界并生成回执后才继续 Quit；失败保持应用打开并显示错误/部分回执，清理不重复，不启动第二个写操作 | AC4 |
 | UI-032 | OnQuitCanceled | quitRequested 和退出提示复位，不取消已完成的写入 | AC4 |
 | UI-033 | Escape/Enter 操作迁移、保存和恢复弹窗 | Escape 取消；默认焦点为 Cancel；不会因 Enter 意外写入 | AC5 |
 | UI-034 | 900×620、1120×760 和较长路径渲染 | 主操作和状态可见；路径可复制；Tabs/表格不遮挡错误 | AC5 |
