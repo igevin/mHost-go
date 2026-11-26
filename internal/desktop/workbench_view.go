@@ -223,6 +223,9 @@ func (m *WorkbenchModel) actionBar(c *ui.Context) {
 		ui.Column(c).Grow(1).Children(func() {
 			ui.Text(c, m.actionSafetyText()).FontSize(12).TextColor(theme.TextMuted)
 		})
+		if m.QuitRequested && ui.Button(c, "Cancel Quit").Clicked() {
+			m.CancelQuit()
+		}
 		if ui.Button(c, "Reload").Disabled(m.busy()).Clicked() {
 			m.Reload()
 		}

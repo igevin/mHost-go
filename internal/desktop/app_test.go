@@ -27,6 +27,25 @@ func TestApp_CleanupAllowsNilModel(t *testing.T) {
 	}
 }
 
+func TestApp_QuitCanceledPreservesDeferredWriteQuit(t *testing.T) {
+	model := NewWorkbenchModel(demo.NewStorageService(), &stubDirectoryPicker{})
+	model.Phase = PhaseWriting
+	app := NewApp(model)
+	if model.RequestQuit() {
+		t.Fatal("writing did not defer quit")
+	}
+	app.deferredQuit = true
+	app.quitting = true
+	app.quitCanceled()
+
+	if !model.QuitRequested {
+		t.Fatal("framework quit cancellation cleared the deferred write quit")
+	}
+	if app.deferredQuit || !app.shouldHideOnClose() {
+		t.Fatal("deferred quit left window close in the quitting state")
+	}
+}
+
 func TestApp_CloseHidesOnlyWhenNotQuitting(t *testing.T) {
 	app := &App{}
 	if !app.shouldHideOnClose() {

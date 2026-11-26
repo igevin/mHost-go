@@ -14,6 +14,7 @@ type App struct {
 	tray   *mygo.Tray
 
 	quitting       bool
+	deferredQuit   bool
 	cleanupOnce    sync.Once
 	cleanupStarted atomic.Bool
 	cleanupDone    atomic.Bool
@@ -31,14 +32,16 @@ func (a *App) Run() error {
 		{Role: mygo.RoleWindowMenu},
 	}))
 	mygo.App.OnBeforeQuit(func(event *mygo.QuitEvent) {
-		a.quitting = true
 		if a.cleanupDone.Load() {
+			a.quitting = true
 			return
 		}
 		if a.Model != nil && !a.Model.RequestQuit() {
+			a.deferredQuit = true
 			event.PreventDefault()
 			return
 		}
+		a.quitting = true
 		if event.SessionEnding {
 			_ = a.Cleanup()
 			return
@@ -46,12 +49,7 @@ func (a *App) Run() error {
 		event.PreventDefault()
 		a.finishQuit()
 	})
-	mygo.App.OnQuitCanceled(func() {
-		a.quitting = false
-		if a.Model != nil {
-			a.Model.CancelQuit()
-		}
-	})
+	mygo.App.OnQuitCanceled(a.quitCanceled)
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		if !a.cleanupDone.Load() {
 			_ = a.Cleanup()
@@ -84,10 +82,20 @@ func (a *App) finishQuit() {
 	if a.cleanupStarted.Swap(true) {
 		return
 	}
-	go func() {
-		_ = a.Cleanup()
-		mygo.App.Quit()
-	}()
+	a.quitting = true
+	_ = a.Cleanup()
+	go mygo.App.Quit()
+}
+
+func (a *App) quitCanceled() {
+	a.quitting = false
+	if a.deferredQuit {
+		a.deferredQuit = false
+		return
+	}
+	if a.Model != nil {
+		a.Model.CancelQuit()
+	}
 }
 
 func (a *App) shouldHideOnClose() bool {

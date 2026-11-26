@@ -37,6 +37,8 @@ type PreviewState struct {
 	Backup    *app.BackupRef
 }
 
+// WorkbenchModel state is owned by the MyGo main thread. Worker results must
+// return through Dispatch; App completes Close on that same thread.
 type WorkbenchModel struct {
 	Service  app.StorageService
 	Picker   app.DirectoryPicker

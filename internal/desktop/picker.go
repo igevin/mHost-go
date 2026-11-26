@@ -19,6 +19,8 @@ func (p *NativeDirectoryPicker) PickDirectory(ctx context.Context, opts app.Dire
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	// Dialog.Open schedules the native panel on the main thread and supports
+	// blocking calls from this worker goroutine.
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 		Parent: p.parent, Title: opts.Title, DefaultPath: opts.DefaultPath,
 		ButtonLabel: opts.ButtonLabel, Message: opts.Message,
