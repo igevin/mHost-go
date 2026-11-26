@@ -54,15 +54,20 @@ permissions:
 
 env:
   MAX_DIFF_LINES: ${{ vars.AI_REVIEW_MAX_DIFF_LINES || 2000 }}
-  AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'MiniMax-M2.7' }}
+  AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'MiniMax-M3.1-Flash' }}
   AI_REVIEW_BASE_URL: ${{ vars.AI_REVIEW_BASE_URL || 'https://api.minimaxi.com/v1' }}
-  # 上下文长度必须填模型的**真实**上限：填大了 Pi 认为还装得下，不触发压缩，
-  # 请求超出端点真实限制后被 400 拒绝——审查直接失败。MiniMax-M2.7 = 204800；
-  # 换成 MiniMax-M3 / M3.1（1M）时必须同步改这个值。
-  AI_REVIEW_CONTEXT_WINDOW: ${{ vars.AI_REVIEW_CONTEXT_WINDOW || 204800 }}
-  # 钉精确版本：该版本已验证 models.json 自定义 provider 的行为，
-  # 浮动版本会让「凭证注入方式」这类结论静默漂移
-  AI_REVIEW_PI_VERSION: 1.3.0
+  # 上下文长度留空 = 按模型自动推导（见 Write models.json 步骤）。显式设置
+  # 时以变量为准。填大了 Pi 不触发压缩、请求被端点 400 拒绝；填小了 Pi 过早
+  # 压缩，白丢审查依据。
+  AI_REVIEW_CONTEXT_WINDOW: ${{ vars.AI_REVIEW_CONTEXT_WINDOW }}
+  # 思考档位：M3.1-Flash 强制开启思考，且**不允许关闭**（传 disabled/none 会
+  # 400），省略 effort 时端点默认 max —— 最贵的一档。显式给一个档位才有意义。
+  # low 足够发现真实缺陷，又不至于把每次审查拖成几分钟。
+  AI_REVIEW_THINKING: ${{ vars.AI_REVIEW_THINKING || 'low' }}
+  # 钉精确版本：Pi 的 CLI 参数与 models.json schema 会随版本漂移，浮动版本
+  # 会让「已验证可用」的结论无声失效（换版本后 --thinking 档位、扩展加载
+  # 行为都可能变）。升级时请同步跑一遍本地冒烟。
+  AI_REVIEW_PI_VERSION: 1.6.1
   # 发布横幅前缀，**同时**被两个步骤使用：
   #   1. Post review          —— 拼出评论头
   #   2. Resolve previous AI review —— 按此前缀回捞上一轮结论
@@ -276,18 +281,29 @@ jobs:
           # 改为 Run 步骤用 --api-key 经进程参数传入（runner 单次单租户；模型侧
           # 无 bash 工具，guard 扩展封禁 /proc 读，无法从 cmdline/environ 取到 key）。
           mkdir -p "$PI_CODING_AGENT_DIR"
+          # 上下文长度按模型实际能力推导。填大了 Pi 认为还装得下、不触发压缩，
+          # 请求超出端点真实限制后被 400 拒绝；填小了 Pi 过早压缩，白丢审查依据。
+          # 变量显式设置时以变量为准（换模型时改变量，或让它自动推导）。
+          case "$AI_REVIEW_MODEL" in
+            MiniMax-M3|MiniMax-M3.1-Flash) context_window=1000000 ;;
+            *)                              context_window=204800 ;;
+          esac
+          if [ -n "$AI_REVIEW_CONTEXT_WINDOW" ]; then
+            context_window="$AI_REVIEW_CONTEXT_WINDOW"
+          fi
           # contextWindow 必须是纯数字：--argjson 会把参数当 JSON 解析，
           # 配成 "200k" 这类值会直接让 jq 退出，生成不出 models.json
-          case "$AI_REVIEW_CONTEXT_WINDOW" in
+          case "$context_window" in
             ''|*[!0-9]*)
-              echo "::warning::AI_REVIEW_CONTEXT_WINDOW='$AI_REVIEW_CONTEXT_WINDOW' is not a number, falling back to 204800"
-              AI_REVIEW_CONTEXT_WINDOW=204800
+              echo "::warning::context window '$context_window' is not a number, falling back to 204800"
+              context_window=204800
               ;;
           esac
+          echo "model=$AI_REVIEW_MODEL contextWindow=$context_window thinking=$AI_REVIEW_THINKING"
           jq -n \
             --arg baseUrl "$AI_REVIEW_BASE_URL" \
             --arg model "$AI_REVIEW_MODEL" \
-            --argjson contextWindow "$AI_REVIEW_CONTEXT_WINDOW" \
+            --argjson contextWindow "$context_window" \
             '{
               "$schema": "https://pi.dev/schemas/models.schema.json",
               providers: {
@@ -339,7 +355,7 @@ jobs:
           timeout 900 pi --print \
             --provider ai-review --model "$AI_REVIEW_MODEL" \
             --api-key "$AI_REVIEW_API_KEY" \
-            --thinking off \
+            --thinking "$AI_REVIEW_THINKING" \
             --tools read,grep,find,ls \
             --exclude-tools 'mcp__*' \
             --no-mcp --no-extensions --no-skills --no-prompt-templates \
@@ -349,8 +365,11 @@ jobs:
             < pr.diff > review.raw.md 2> review.stderr
           code=$?
           set -e
-          # 思考链以 <think> 标签内联在 content 里返回（--thinking off 只缩短、
-          # 不消除），必须剥掉再发评论——否则报告开头会带一大段模型独白。
+          # 思考链有两种可能的落地形态，都要防：
+          #   1. 以 <think> 标签内联在 content 里（M2 系列如此）——必须剥掉，
+          #      否则报告开头会带一大段模型独白
+          #   2. 走独立的 reasoning_content 字段（M3.1-Flash 如此）——pi 通常
+          #      不把它打进 --print 的 stdout，但模型侧仍可能改用内联形态
           # perl 多字节安全地跨行剥离；剥完若全文为空说明模型只吐了思考链，按失败处理
           perl -0777 -pe 's/<think>.*?<\/think>//gs' review.raw.md | sed -e '/./,$!d' > report.md
           status=failed
