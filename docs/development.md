@@ -109,6 +109,38 @@ macOS 首次运行时需在「系统设置 → 隐私与安全性」放行自签
 
 master 或 PR 的 macOS CI（`.github/workflows/phase-0.yml`）会自动产出并上传 artifact，包含 `.app`、`.dmg`、`build-metadata.txt`、`SHA256SUMS`，可作为本地构建的对照基线。
 
+## PR 会自动跑什么
+
+每个指向 master 的 PR 会并行触发三个工作流：
+
+| 工作流 | 跑在哪 | 内容 |
+| --- | --- | --- |
+| `CI`（`ci.yml`） | ubuntu | `gofmt` 格式门禁、`go vet`、单元测试 + 覆盖率、`go test -race` 竞态检测、`go build`、darwin/arm64 交叉编译 + vet |
+| `Phase 0 validation`（`phase-0.yml`） | macOS | 打包 `.app` / DMG、签名、包内校验 |
+| `AI Code Review`（`ai-review.yml`） | ubuntu | 以 `gevinyu` 身份在 PR 上发一条 AI 审查意见 |
+
+### AI 审查的性质
+
+审查是**建议性（advisory）**的：它发的是 `COMMENTED` review，不计入 mergeability，不会挡住合并。
+判定权仍在人手里——AI 只提供信息，不构成门禁。
+
+结论会分成三档：
+
+- ✅ **可以合并**——没有发现需要处理的问题；
+- 🟡 **建议改进**——不影响正确性，可以合并；
+- ⛔ **需要修改后再合**——存在必须先处理的问题。
+
+复审时会把上一轮结论喂回模型，因此**只报本轮新增的问题**；连续复审没有新增 🔴 时才会给「可以合并」。
+每条审查开头都带被审查的 head SHA，评论里也会写明它取代上一轮哪一条。
+
+### 几个容易误解的地方
+
+- **fork PR 不做 AI 审查。** CI 与打包照跑，但审查会跳过——审查用的凭据是个人 PAT，不对外部作者的 PR 暴露。
+- **审查依据只信 master 上的版本。** 评审标准（`.github/ai-review-prompt.md`）与防线（`.github/ai-review/guard.ts`）都从 master 恢复，PR 里的副本不可信。master 上缺这两个文件时审查直接拒绝运行，不会降级成一份无标准、无防线的自由审查。
+- **审查程序本身也来自 master。** 工作流用 `pull_request_target` 触发，执行的是 master 上的工作流定义，PR 只作为**数据**被读取，从不被执行。
+- **没配置密钥时是「跳过」而不是「失败」。** 缺少模型 API key 或 reviewer token 时审查不跑，check 保持绿色并在日志里告警。补齐密钥后重新触发即可自动开始。
+- **diff 超过 2000 行会降级。** 此时只审核心目录（`internal`、`cmd`、依赖清单、CI 工作流与构建脚本）；PR 不涉及核心目录时改为审完整 diff。评论横幅会写明这次实际审的范围与是否被截断。
+
 ## 目录与端口约定
 
 | 路径 / 端口 | 用途 |
