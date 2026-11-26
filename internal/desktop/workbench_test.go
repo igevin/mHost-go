@@ -205,6 +205,24 @@ func TestWorkbenchCancelReloadIgnoresLateResult(t *testing.T) {
 	}
 }
 
+// UI-006.
+func TestWorkbenchCancelPreviewIgnoresLateResult(t *testing.T) {
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-cancel-preview")
+	var tasks []func()
+	model.Async = func(fn func()) { tasks = append(tasks, fn) }
+	model.PreviewValidationChanges()
+	if model.Phase != PhasePreviewing || len(tasks) != 1 {
+		t.Fatalf("preview phase/tasks = %v/%d", model.Phase, len(tasks))
+	}
+	model.CancelOperation()
+	tasks[0]()
+	if model.Phase != PhaseReady || model.Preview != nil || model.Problem != nil {
+		t.Fatalf("late preview changed canceled state: %v/%+v/%+v", model.Phase, model.Preview, model.Problem)
+	}
+}
+
 type retryInspectService struct {
 	app.StorageService
 	calls int

@@ -86,7 +86,7 @@ func (m *WorkbenchModel) emptyView(c *ui.Context) {
 			}
 			ui.Text(c, "No directory is accessed until you choose one.").FontSize(12).TextColor(theme.TextMuted)
 		}
-		if m.Phase == PhaseLoading && ui.Button(c, "Cancel").Clicked() {
+		if (m.Phase == PhaseLoading || m.Phase == PhasePreviewing) && ui.Button(c, "Cancel").Clicked() {
 			m.CancelOperation()
 		}
 		if m.Phase == PhaseFailed && m.Problem != nil {
@@ -246,7 +246,7 @@ func (m *WorkbenchModel) actionBar(c *ui.Context) {
 		ui.Column(c).Grow(1).Children(func() {
 			ui.Text(c, m.actionSafetyText()).FontSize(12).TextColor(theme.TextMuted)
 		})
-		if m.Phase == PhaseLoading && ui.Button(c, "Cancel").Clicked() {
+		if (m.Phase == PhaseLoading || m.Phase == PhasePreviewing) && ui.Button(c, "Cancel").Clicked() {
 			m.CancelOperation()
 		}
 		if m.QuitRequested && ui.Button(c, "Cancel Quit").Clicked() {
