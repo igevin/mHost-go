@@ -15,7 +15,7 @@ func TestApp_CleanupIsIdempotent(t *testing.T) {
 	if err := app.Cleanup(); err != nil {
 		t.Fatal(err)
 	}
-	if !model.closed {
+	if !model.closed.Load() {
 		t.Fatal("cleanup did not close the workbench")
 	}
 }

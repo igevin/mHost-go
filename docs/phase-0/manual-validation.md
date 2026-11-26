@@ -1,5 +1,7 @@
 # Phase 0 macOS 真机验证手册
 
+> **历史归档**：本文仅记录 Phase 0 原型及其历史 artifact 的验证步骤，不适用于当前 `mHost Phase 1.app`、`mhost-phase-1-darwin-arm64` 或 Storage Workbench。当前 UI 验证计划见 [Phase 1 Storage Workbench 验证计划](../phase-1/storage-ui-validation.md)。
+
 ## 适用范围
 
 仅在一台用于测试的 M 系列 Mac 上执行。不要在工作生产环境、真实用户数据目录或需要持续联网的主力环境测试 DNS。GitHub Actions 只验证构建、签名、架构和 proxy 非提权自检，不执行下列系统 DNS 操作。

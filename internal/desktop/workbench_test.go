@@ -427,6 +427,10 @@ func TestWorkbenchQuitWaitsForWriting(t *testing.T) {
 	if !model.RequestQuit() {
 		t.Fatal("idle model refused quit")
 	}
+	model.Phase = PhaseSelecting
+	if model.RequestQuit() || !model.QuitRequested {
+		t.Fatal("directory selection did not defer quit until the native picker dismisses")
+	}
 }
 
 // UI-027.

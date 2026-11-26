@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/egoist/mygo/ui"
 	app "github.com/igevin/mHost-go/internal/app"
@@ -64,7 +65,7 @@ type WorkbenchModel struct {
 	lastSourceRoot string
 	operation      uint64
 	cancel         context.CancelFunc
-	closed         bool
+	closed         atomic.Bool
 }
 
 func NewWorkbenchModel(service app.StorageService, picker app.DirectoryPicker) *WorkbenchModel {
@@ -85,7 +86,7 @@ func (m *WorkbenchModel) OpenSource() {
 	id, ctx := m.beginOperation()
 	m.Phase = PhaseSelecting
 	m.Problem = nil
-	m.Async(func() {
+	m.runAsync(func() {
 		path, err := m.Picker.PickDirectory(ctx, app.DirectoryOptions{
 			Title: "Choose Synthetic Source Data", ButtonLabel: "Open Source", Message: "The selected source remains read only.",
 		})
@@ -93,7 +94,7 @@ func (m *WorkbenchModel) OpenSource() {
 			m.dispatchError(id, "open_source", err)
 			return
 		}
-		m.Dispatch(func() {
+		m.dispatch(func() {
 			if m.current(id) {
 				m.lastSourceRoot = path
 				m.Workspace = app.Workspace{}
@@ -109,7 +110,7 @@ func (m *WorkbenchModel) OpenSource() {
 
 func (m *WorkbenchModel) inspect(ctx context.Context, id uint64, sourceRoot string) {
 	workspace, err := m.Service.Inspect(ctx, sourceRoot)
-	m.Dispatch(func() {
+	m.dispatch(func() {
 		if !m.current(id) {
 			return
 		}
@@ -135,9 +136,9 @@ func (m *WorkbenchModel) Reload() {
 	workspaceID := m.Workspace.ID
 	m.Phase = PhaseLoading
 	m.Problem = nil
-	m.Async(func() {
+	m.runAsync(func() {
 		workspace, err := m.Service.Refresh(ctx, workspaceID)
-		m.Dispatch(func() {
+		m.dispatch(func() {
 			if !m.current(id) {
 				return
 			}
@@ -187,7 +188,7 @@ func (m *WorkbenchModel) Retry() {
 	m.Phase = PhaseLoading
 	m.Problem = nil
 	sourceRoot := m.lastSourceRoot
-	m.Async(func() { m.inspect(ctx, id, sourceRoot) })
+	m.runAsync(func() { m.inspect(ctx, id, sourceRoot) })
 }
 
 func (m *WorkbenchModel) CreateWorkspace() {
@@ -198,7 +199,7 @@ func (m *WorkbenchModel) CreateWorkspace() {
 	sourceID := m.Workspace.ID
 	m.Phase = PhaseSelecting
 	m.Problem = nil
-	m.Async(func() {
+	m.runAsync(func() {
 		path, err := m.Picker.PickDirectory(ctx, app.DirectoryOptions{
 			Title: "Choose an Empty Working-Copy Directory", ButtonLabel: "Create Working Copy", Message: "Only this working copy can be changed.", CreateDirectories: true,
 		})
@@ -206,13 +207,13 @@ func (m *WorkbenchModel) CreateWorkspace() {
 			m.dispatchError(id, "create_workspace", err)
 			return
 		}
-		m.Dispatch(func() {
+		m.dispatch(func() {
 			if m.current(id) {
 				m.Phase = PhaseCopying
 			}
 		})
 		workspace, err := m.Service.CreateWorkspace(ctx, sourceID, path)
-		m.Dispatch(func() {
+		m.dispatch(func() {
 			if !m.current(id) {
 				return
 			}
@@ -238,9 +239,9 @@ func (m *WorkbenchModel) PreviewMigration() {
 	workspaceID := m.Workspace.ID
 	m.Phase = PhasePreviewing
 	m.Problem = nil
-	m.Async(func() {
+	m.runAsync(func() {
 		plan, err := m.Service.PreviewMigration(ctx, workspaceID)
-		m.Dispatch(func() {
+		m.dispatch(func() {
 			if !m.current(id) {
 				return
 			}
@@ -263,9 +264,9 @@ func (m *WorkbenchModel) PreviewValidationChanges() {
 	workspaceID := m.Workspace.ID
 	m.Phase = PhasePreviewing
 	m.Problem = nil
-	m.Async(func() {
+	m.runAsync(func() {
 		changes, err := m.Service.PreviewValidationChange(ctx, workspaceID)
-		m.Dispatch(func() {
+		m.dispatch(func() {
 			if !m.current(id) {
 				return
 			}
@@ -299,7 +300,7 @@ func (m *WorkbenchModel) ConfirmPreview() {
 	m.Receipt = nil
 	m.Phase = PhaseWriting
 	m.Problem = nil
-	m.Async(func() {
+	m.runAsync(func() {
 		var receipt app.WriteReceipt
 		var err error
 		switch preview.Kind {
@@ -312,7 +313,7 @@ func (m *WorkbenchModel) ConfirmPreview() {
 		default:
 			err = errors.New("unknown preview kind")
 		}
-		m.Dispatch(func() {
+		m.dispatch(func() {
 			if !m.current(id) {
 				return
 			}
@@ -329,9 +330,9 @@ func (m *WorkbenchModel) ConfirmPreview() {
 }
 
 func (m *WorkbenchModel) refreshAfterWrite(id uint64, ctx context.Context, workspaceID string) {
-	m.Async(func() {
+	m.runAsync(func() {
 		workspace, err := m.Service.Refresh(ctx, workspaceID)
-		m.Dispatch(func() {
+		m.dispatch(func() {
 			if !m.current(id) {
 				return
 			}
@@ -355,9 +356,9 @@ func (m *WorkbenchModel) LoadBackups() {
 	workspaceID := m.Workspace.ID
 	m.Phase = PhaseLoading
 	m.Problem = nil
-	m.Async(func() {
+	m.runAsync(func() {
 		backups, err := m.Service.ListBackups(ctx, workspaceID)
-		m.Dispatch(func() {
+		m.dispatch(func() {
 			if !m.current(id) {
 				return
 			}
@@ -394,7 +395,7 @@ func (m *WorkbenchModel) RestoreSelectedBackup() {
 }
 
 func (m *WorkbenchModel) RequestQuit() bool {
-	if m.Phase == PhaseWriting || m.Phase == PhaseCopying {
+	if m.Phase == PhaseWriting || m.Phase == PhaseCopying || m.Phase == PhaseSelecting {
 		m.QuitRequested = true
 		return false
 	}
@@ -409,15 +410,12 @@ func (m *WorkbenchModel) CancelQuit() {
 }
 
 func (m *WorkbenchModel) Close() error {
-	m.closed = true
+	m.closed.Store(true)
 	m.operation++
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
 	}
-	m.Dispatch = func(func()) {}
-	m.Async = func(func()) {}
-	m.OnSafeToQuit = nil
 	return nil
 }
 
@@ -445,11 +443,25 @@ func (m *WorkbenchModel) beginOperation() (uint64, context.Context) {
 }
 
 func (m *WorkbenchModel) current(id uint64) bool {
-	return !m.closed && id == m.operation
+	return !m.closed.Load() && id == m.operation
+}
+
+func (m *WorkbenchModel) runAsync(fn func()) {
+	if m.closed.Load() {
+		return
+	}
+	m.Async(fn)
+}
+
+func (m *WorkbenchModel) dispatch(fn func()) {
+	if m.closed.Load() {
+		return
+	}
+	m.Dispatch(fn)
 }
 
 func (m *WorkbenchModel) dispatchError(id uint64, operation string, err error) {
-	m.Dispatch(func() {
+	m.dispatch(func() {
 		if m.current(id) {
 			m.setError(operation, err)
 		}

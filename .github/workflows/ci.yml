@@ -1,7 +1,7 @@
 name: CI
 
 # PR 门禁：只跑「快 + 便宜 + 能挡住坏提交」的检查，ubuntu 足够。
-# macOS 上的 .app/DMG 打包与签名在 phase-0.yml 里单独跑，不在这里重复。
+# macOS 上的 .app/DMG 打包与签名在 phase-1.yml 里单独跑，不在这里重复。
 on:
   push:
     branches: [master]
