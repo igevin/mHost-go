@@ -19,6 +19,10 @@ coverage.xml
 *.coverprofile
 profile.cov
 
+# Phase 0 build outputs
+/build/
+/resources/darwin-arm64/bin/mhost-dns-proxy
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 

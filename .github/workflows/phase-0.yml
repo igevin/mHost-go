@@ -1,0 +1,44 @@
+name: Phase 0 validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - feat/phase-0-validation
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  darwin-arm64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Verify Apple silicon runner
+        run: test "$(uname -m)" = arm64
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Run tests
+        run: go test ./...
+      - name: Run race detector
+        run: go test -race ./...
+      - name: Run static checks
+        run: go vet ./...
+      - name: Build arm64 app and DNS proxy
+        run: ./scripts/build-darwin-arm64.sh
+      - name: Verify packaged app
+        run: ./scripts/verify-darwin-arm64.sh
+      - name: Upload Phase 0 artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: mhost-phase-0-darwin-arm64
+          path: |
+            build/darwin-arm64/*.app
+            build/darwin-arm64/*.dmg
+            build/darwin-arm64/build-metadata.txt
+            build/darwin-arm64/SHA256SUMS
+          if-no-files-found: error

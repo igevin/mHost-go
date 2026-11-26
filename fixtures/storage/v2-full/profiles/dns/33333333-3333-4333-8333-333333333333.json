@@ -1,0 +1,19 @@
+{
+  "id": "33333333-3333-4333-8333-333333333333",
+  "name": "DNS lab",
+  "enabled": true,
+  "protected": true,
+  "tags": ["dns", "synthetic"],
+  "rules": [
+    {
+      "id": "43333333-3333-4333-8333-333333333333",
+      "ip": "127.0.0.1",
+      "domains": ["dns.test", "www.dns.test"],
+      "enabled": true,
+      "source": {"type": "Manual"}
+    }
+  ],
+  "mode": "dns",
+  "created_at": "2024-06-03T10:00:00Z",
+  "updated_at": "2024-06-04T10:00:00Z"
+}

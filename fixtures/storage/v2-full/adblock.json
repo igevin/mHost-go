@@ -1,0 +1,23 @@
+{
+  "enabled": true,
+  "sources": [
+    {
+      "source_id": "66666666-6666-4666-8666-666666666666",
+      "name": "Synthetic blocklist",
+      "url": "https://example.invalid/hosts.txt",
+      "enabled": true,
+      "response": "zero_address",
+      "format": "hosts",
+      "last_fetched_at": "2024-06-05T09:00:00Z",
+      "last_error": null,
+      "rule_count": 2,
+      "etag": "\"synthetic-v1\"",
+      "rules_limit_override": null,
+      "last_refresh_duration_ms": 25,
+      "last_refresh_failed_at": null
+    }
+  ],
+  "whitelist": ["allowed.test"],
+  "auto_refresh_enabled": true,
+  "refresh_interval_hours": 24
+}
