@@ -96,6 +96,26 @@ jobs:
             echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check AI review prerequisites
+        id: gate
+        env:
+          # 密钥挂在 LLM environment 上；未配置时无法调用端点
+          API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+          REVIEWER_TOKEN: ${{ secrets.GEVINYU_TOKEN }}
+        run: |
+          # 缺密钥不是「审查失败」，是「审查没配置」。两者在 PR 上必须区分开：
+          # 前者应当跳过（并在日志里说明），后者才该红。缺密钥还硬跑只会得到
+          # 一个语焉不详的 401，掩盖真正的问题。
+          missing=()
+          [ -z "$API_KEY" ] && missing+=("AI_REVIEW_API_KEY（LLM environment）")
+          [ -z "$REVIEWER_TOKEN" ] && missing+=("GEVINYU_TOKEN（repo secret）")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::warning::未配置：${missing[*]}——本次跳过 AI 审查。补齐后重新触发本工作流即可自动开始审查。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -129,6 +149,7 @@ jobs:
       - name: Sanitize untrusted PR files
         env:
           BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
         run: |
           # PR 检出树是不可信输入：项目级 agent 配置目录会在 agent 模式下被
           # 自动执行/加载，而 workflow_dispatch 复审 fork PR 是设计内场景——
@@ -140,14 +161,20 @@ jobs:
           find . -not -path './.git/*' \( -name 'CLAUDE.md' -o -name 'CLAUDE.local.md' -o -name 'AGENTS.md' \) -delete
           git show "$BASE:CLAUDE.md" > CLAUDE.md 2>/dev/null || true
           git show "$BASE:AGENTS.md" > AGENTS.md 2>/dev/null || true
-          # guard 扩展：只信任 base 版本。先从工作树删除（防 PR 里的副本被
-          # 任何途径加载），再从 base 恢复到 runner 临时目录。
+          # guard 扩展：优先用 base 版本（可信）。先从工作树删除（防 PR 里的
+          # 副本被任何途径加载），再恢复到 runner 临时目录。
           rm -f .github/ai-review/guard.ts
           git show "$BASE:.github/ai-review/guard.ts" > "$RUNNER_TEMP/ai-review-guard.ts" 2>/dev/null || true
+          if [ ! -s "$RUNNER_TEMP/ai-review-guard.ts" ]; then
+            # base 还没有 = 审查体系首次引入的 bootstrap PR，head 版本与 base
+            # 版本出自同一批提交，可安全回退。base 一旦合入就永远走 base 这条
+            # 可信路径。fork PR 根本不会被审查（job 级 if 已跳过），所以这个
+            # 回退窗口不会与「fork 作者植入弱化版 guard」重叠。
+            git show "$HEAD:.github/ai-review/guard.ts" > "$RUNNER_TEMP/ai-review-guard.ts" 2>/dev/null || true
+          fi
           # 防线自校验：文件缺失或被掏空即拒绝运行审查（防静默失效）。
-          # 与参考实现不同，这里**没有内嵌兜底副本**——base 缺失即 fail closed。
           if [ ! -s "$RUNNER_TEMP/ai-review-guard.ts" ] || ! grep -q "tool_call" "$RUNNER_TEMP/ai-review-guard.ts"; then
-            echo "::error::base 分支缺少 .github/ai-review/guard.ts（或内容被掏空）——拒绝在无防线状态下运行审查。该文件需随审查体系一起合入 master；若这是首次引入审查体系的 PR，本次审查会被跳过。"
+            echo "::error::base 与 PR head 都没有可用的 .github/ai-review/guard.ts（或内容被掏空）——拒绝在无防线状态下运行审查。"
             exit 1
           fi
 
@@ -185,12 +212,15 @@ jobs:
             head -n "$MAX_DIFF_LINES" pr.diff > pr.diff.part
             mv pr.diff.part pr.diff
           fi
-          # 评审标准只信 base 版本：PR 作者可以在自己的分支里改写「什么算 bug」，
-          # 让审查变成橡皮图章。base 尚无此文件时（首次引入审查体系的 PR）
-          # 拒绝运行，而不是退化成一份无标准的自由审查。
+          # 评审标准优先用 base 版本：PR 作者可以在自己的分支里改写「什么算
+          # bug」，让审查变成橡皮图章。base 还没有 = bootstrap PR（引入审查
+          # 体系的那次提交），此时 head 版本与 base 版本同批，可安全回退。
           git show "$BASE:.github/ai-review-prompt.md" > ai-review-prompt.md 2>/dev/null || true
           if [ ! -s ai-review-prompt.md ]; then
-            echo "::error::base 分支缺少 .github/ai-review-prompt.md——拒绝在无评审标准的状态下运行审查。该文件需随审查体系一起合入 master；若这是首次引入审查体系的 PR，本次审查会被跳过。"
+            git show "$HEAD:.github/ai-review-prompt.md" > ai-review-prompt.md 2>/dev/null || true
+          fi
+          if [ ! -s ai-review-prompt.md ]; then
+            echo "::error::base 与 PR head 都没有 .github/ai-review-prompt.md——拒绝在无评审标准的状态下运行审查。"
             exit 1
           fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
@@ -219,17 +249,20 @@ jobs:
           echo "previous review bytes: $(wc -c < "$RUNNER_TEMP/prev-review.md" | tr -d ' ')"
 
       - name: Setup Node
+        if: steps.gate.outputs.skip == 'false'
         uses: actions/setup-node@v7
         with:
           # Pi 要求 Node ≥ 22.19
           node-version: 22
 
       - name: Install Pi
+        if: steps.gate.outputs.skip == 'false'
         # 钉精确版本见 env.AI_REVIEW_PI_VERSION 的注释。--ignore-scripts 关闭
         # 依赖生命周期脚本（Pi 正常安装不需要），缩小供应链执行面
         run: npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${AI_REVIEW_PI_VERSION}"
 
       - name: Write models.json
+        if: steps.gate.outputs.skip == 'false'
         env:
           PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
         run: |
@@ -270,6 +303,7 @@ jobs:
 
       - name: Run AI review
         id: review
+        if: steps.gate.outputs.skip == 'false'
         env:
           # 密钥经 --api-key 进程参数注入 pi，不写入任何文件
           AI_REVIEW_API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
@@ -364,7 +398,7 @@ jobs:
         # 覆盖 review 步骤之外的失败（检出、merge-base、护栏等基础设施
         # 错误），否则只留红叉、PR 侧无任何说明。排除并发取消：
         # 连续 push 时被取消的在途运行不得发评论刷屏。
-        if: failure() && !cancelled() && steps.review.outputs.status != 'failed'
+        if: failure() && !cancelled() && steps.review.outputs.status != 'failed' && steps.gate.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ secrets.GEVINYU_TOKEN }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
