@@ -78,6 +78,8 @@ go run ./cmd/storage-probe -root fixtures/storage/mixed-invalid
 
 脚本先交叉构建 `resources/darwin-arm64/bin/mhost-dns-proxy`，再执行 `go tool mygo build -platform darwin/arm64`。macOS runner 还会验证架构、ad-hoc 签名和包内 proxy 自检，并生成 DMG、`SHA256SUMS` 与构建元数据。
 
+日常开发（调试、测试、打包）推荐直接使用 `make`，命令清单见 `Makefile`，详细说明见 [docs/development.md](docs/development.md)。
+
 ## 运行测试构建
 
 Phase 0 构建产物仅用于专用 M 系列 Mac 测试环境。从 GitHub Actions 下载 `mhost-phase-0-darwin-arm64` artifact 后，需要在“隐私与安全性”中显式允许打开，或仅对测试包移除 quarantine 属性：
