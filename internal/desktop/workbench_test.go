@@ -1,0 +1,218 @@
+package desktop
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/egoist/mygo/ui"
+	app "github.com/igevin/mHost-go/internal/app"
+	"github.com/igevin/mHost-go/internal/app/demo"
+)
+
+type stubDirectoryPicker struct {
+	path  string
+	err   error
+	calls int
+}
+
+func (p *stubDirectoryPicker) PickDirectory(context.Context, app.DirectoryOptions) (string, error) {
+	p.calls++
+	return p.path, p.err
+}
+
+func newTestWorkbench(service app.StorageService, picker app.DirectoryPicker) *WorkbenchModel {
+	model := NewWorkbenchModel(service, picker)
+	model.Async = func(fn func()) { fn() }
+	model.Dispatch = func(fn func()) { fn() }
+	return model
+}
+
+func openTestWorkspace(t *testing.T, model *WorkbenchModel, picker *stubDirectoryPicker, source, destination string) {
+	t.Helper()
+	picker.path = source
+	model.OpenSource()
+	if model.Phase != PhaseReady || model.Workspace.Access != app.AccessReadOnly {
+		t.Fatalf("open source phase/access = %v/%v, problem = %+v", model.Phase, model.Workspace.Access, model.Problem)
+	}
+	picker.path = destination
+	model.CreateWorkspace()
+	if model.Phase != PhaseReady || model.Workspace.Access != app.AccessWritable {
+		t.Fatalf("create workspace phase/access = %v/%v, problem = %+v", model.Phase, model.Workspace.Access, model.Problem)
+	}
+}
+
+// UI-001.
+func TestWorkbenchInitialStateDoesNotAccessStorage(t *testing.T) {
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	model.DemoMode = true
+	tester := ui.NewTester(model.View, 1120, 760)
+	tester.Frame()
+
+	if model.Phase != PhaseEmpty || picker.calls != 0 {
+		t.Fatalf("phase/picker calls = %v/%d", model.Phase, picker.calls)
+	}
+	if !tester.HasText("No directory is accessed until you choose one") || !tester.HasText("Demo service") {
+		t.Fatalf("initial view is missing safety copy: %q", tester.Texts())
+	}
+}
+
+// UI-003.
+func TestWorkbenchOpenSourceFromView(t *testing.T) {
+	picker := &stubDirectoryPicker{path: "/fixtures/v2-full"}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	tester := ui.NewTester(model.View, 1120, 760)
+	if err := tester.Click("Open Source…"); err != nil {
+		t.Fatal(err)
+	}
+
+	if model.Workspace.Root != "/fixtures/v2-full" || model.Workspace.StorageVersion != 2 {
+		t.Fatalf("workspace = %+v", model.Workspace)
+	}
+	if len(model.Workspace.Summary.Profiles) != 2 || model.Problem != nil {
+		t.Fatalf("summary/problem = %+v/%+v", model.Workspace.Summary, model.Problem)
+	}
+}
+
+// UI-002 and UI-004.
+func TestWorkbenchPickerCancelAndPartialIssues(t *testing.T) {
+	picker := &stubDirectoryPicker{err: app.ErrPickerCancelled}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	model.OpenSource()
+	if model.Phase != PhaseEmpty || model.Problem != nil {
+		t.Fatalf("cancel phase/problem = %v/%+v", model.Phase, model.Problem)
+	}
+
+	picker.err = nil
+	picker.path = "/fixtures/mixed-invalid"
+	model.OpenSource()
+	if len(model.Workspace.Summary.Issues) == 0 || len(model.Workspace.Summary.Profiles) != 1 {
+		t.Fatalf("partial summary = %+v", model.Workspace.Summary)
+	}
+}
+
+// UI-012 and UI-014.
+func TestWorkbenchMigrationPreviewCancelAndApply(t *testing.T) {
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v1-hosts", "/tmp/work-v1")
+	revision := model.Workspace.Revision
+
+	model.PreviewMigration()
+	if model.Preview == nil || model.Preview.Migration == nil {
+		t.Fatal("migration preview was not opened")
+	}
+	model.CancelPreview()
+	if model.Workspace.StorageVersion != 1 || model.Workspace.Revision != revision {
+		t.Fatalf("cancel mutated workspace = %+v", model.Workspace)
+	}
+
+	model.PreviewMigration()
+	model.ConfirmPreview()
+	if model.Workspace.StorageVersion != 2 || model.Receipt == nil {
+		t.Fatalf("migration workspace/receipt = %+v/%+v", model.Workspace, model.Receipt)
+	}
+	for _, result := range model.Receipt.Results {
+		if result.Status == app.WriteFailed || !result.ReadbackVerified {
+			t.Fatalf("unverified migration result = %+v", result)
+		}
+	}
+}
+
+// UI-018, UI-022 and UI-024.
+func TestWorkbenchValidationWriteBackupAndRestore(t *testing.T) {
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-v2")
+
+	model.PreviewValidationChanges()
+	model.ConfirmPreview()
+	if model.Receipt == nil || len(model.Receipt.Results) != 4 || model.Problem != nil {
+		t.Fatalf("write receipt/problem = %+v/%+v", model.Receipt, model.Problem)
+	}
+	model.LoadBackups()
+	if len(model.Backups) == 0 {
+		t.Fatal("write did not expose backups")
+	}
+	revision := model.Workspace.Revision
+	model.RequestRestore(model.Backups[0].ID)
+	model.CancelPreview()
+	if model.Workspace.Revision != revision {
+		t.Fatal("cancel restore changed revision")
+	}
+	model.RequestRestore(model.Backups[0].ID)
+	model.ConfirmPreview()
+	if model.Receipt == nil || len(model.Receipt.Results) != 1 || !model.Receipt.Results[0].ReadbackVerified {
+		t.Fatalf("restore receipt = %+v", model.Receipt)
+	}
+}
+
+type saveFailureService struct {
+	app.StorageService
+	receipt app.WriteReceipt
+	err     error
+}
+
+func (s saveFailureService) SaveValidationChange(context.Context, string, string) (app.WriteReceipt, error) {
+	return s.receipt, s.err
+}
+
+// UI-020.
+func TestWorkbenchWriteFailureKeepsPartialReceipt(t *testing.T) {
+	base := demo.NewStorageService()
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(base, picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-before-failure")
+	preview, err := base.PreviewValidationChange(context.Background(), model.Workspace.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := saveFailureService{
+		StorageService: base,
+		receipt: app.WriteReceipt{WorkspaceID: model.Workspace.ID, Results: []app.WriteResult{{
+			Entity: "manifest", Status: app.WriteFailed, Preservation: app.PreservePreserved,
+		}}},
+		err: errors.New("injected write failure"),
+	}
+	model.Service = failure
+	model.PreviewValidationChanges()
+	model.ConfirmPreview()
+
+	if model.Problem == nil || model.Receipt == nil || model.Workspace.Revision != preview.BaseRevision {
+		t.Fatalf("failure problem/receipt/workspace = %+v/%+v/%+v", model.Problem, model.Receipt, model.Workspace)
+	}
+}
+
+// UI-030.
+func TestWorkbenchQuitWaitsForWriting(t *testing.T) {
+	model := newTestWorkbench(demo.NewStorageService(), &stubDirectoryPicker{})
+	model.Phase = PhaseWriting
+	if model.RequestQuit() || !model.QuitRequested {
+		t.Fatal("writing did not defer quit")
+	}
+	model.CancelQuit()
+	if model.QuitRequested {
+		t.Fatal("cancel quit left request set")
+	}
+	model.Phase = PhaseReady
+	if !model.RequestQuit() {
+		t.Fatal("idle model refused quit")
+	}
+}
+
+// UI-027.
+func TestWorkbenchHiddenWindowRetainsWorkspace(t *testing.T) {
+	picker := &stubDirectoryPicker{}
+	model := newTestWorkbench(demo.NewStorageService(), picker)
+	openTestWorkspace(t, model, picker, "/fixtures/v2-full", "/tmp/work-hidden")
+	tester := ui.NewTester(model.View, 1120, 760)
+	model.SelectedTab = 3
+	tester.SetWindowHidden(true)
+	tester.SetWindowHidden(false)
+	tester.Frame()
+
+	if model.SelectedTab != 3 || model.Workspace.Root != "/tmp/work-hidden" {
+		t.Fatalf("hidden window lost state: tab/root = %d/%q", model.SelectedTab, model.Workspace.Root)
+	}
+}

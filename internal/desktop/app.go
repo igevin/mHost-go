@@ -1,8 +1,6 @@
 package desktop
 
 import (
-	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 
@@ -10,25 +8,20 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-type closeServer interface {
-	Close() error
-}
-
 type App struct {
-	Model    *Model
-	manager  DNSManager
-	server   closeServer
-	window   *mygo.Window
-	tray     *mygo.Tray
-	quitting bool
+	Model  *WorkbenchModel
+	window *mygo.Window
+	tray   *mygo.Tray
 
-	cleanupOnce sync.Once
-	cleanupDone atomic.Bool
-	cleanupErr  error
+	quitting       bool
+	cleanupOnce    sync.Once
+	cleanupStarted atomic.Bool
+	cleanupDone    atomic.Bool
+	cleanupErr     error
 }
 
-func NewApp(model *Model, manager DNSManager, server closeServer) *App {
-	return &App{Model: model, manager: manager, server: server}
+func NewApp(model *WorkbenchModel) *App {
+	return &App{Model: model}
 }
 
 func (a *App) Run() error {
@@ -42,18 +35,22 @@ func (a *App) Run() error {
 		if a.cleanupDone.Load() {
 			return
 		}
+		if a.Model != nil && !a.Model.RequestQuit() {
+			event.PreventDefault()
+			return
+		}
 		if event.SessionEnding {
 			_ = a.Cleanup()
 			return
 		}
 		event.PreventDefault()
-		go func() {
-			_ = a.Cleanup()
-			mygo.App.Quit()
-		}()
+		a.finishQuit()
 	})
 	mygo.App.OnQuitCanceled(func() {
 		a.quitting = false
+		if a.Model != nil {
+			a.Model.CancelQuit()
+		}
 	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		if !a.cleanupDone.Load() {
@@ -76,17 +73,21 @@ func (a *App) Run() error {
 func (a *App) Cleanup() error {
 	a.cleanupOnce.Do(func() {
 		defer a.cleanupDone.Store(true)
-		var stopErr error
-		if a.manager != nil {
-			stopErr = a.manager.Stop(context.Background())
+		if a.Model != nil {
+			a.cleanupErr = a.Model.Close()
 		}
-		var serverErr error
-		if a.server != nil {
-			serverErr = a.server.Close()
-		}
-		a.cleanupErr = errors.Join(stopErr, serverErr)
 	})
 	return a.cleanupErr
+}
+
+func (a *App) finishQuit() {
+	if a.cleanupStarted.Swap(true) {
+		return
+	}
+	go func() {
+		_ = a.Cleanup()
+		mygo.App.Quit()
+	}()
 }
 
 func (a *App) shouldHideOnClose() bool {
@@ -95,9 +96,9 @@ func (a *App) shouldHideOnClose() bool {
 
 func (a *App) ready() {
 	a.window = mygo.NewWindow(mygo.WindowOptions{
-		Title:   "mHost Phase 0",
-		Width:   1100,
-		Height:  720,
+		Title:   "mHost Phase 1 · Storage Workbench",
+		Width:   1120,
+		Height:  760,
 		Content: ui.View(a.Model.View),
 	})
 	a.window.OnClose(func(event *mygo.CloseEvent) {
@@ -106,47 +107,15 @@ func (a *App) ready() {
 			a.window.Hide()
 		}
 	})
-	a.Model.OnDNSStart = func() {
-		a.Model.DNSStatus = "Starting DNS test…"
-		go func() {
-			err := a.manager.Start(context.Background())
-			a.window.Update(func() {
-				if err != nil {
-					a.Model.DNSStatus = "Start failed; recovery attempted: " + err.Error()
-				} else {
-					a.Model.DNSStatus = "DNS test is running"
-				}
-			})
-		}()
-	}
-	a.Model.OnDNSStop = func() {
-		a.Model.DNSStatus = "Stopping DNS test…"
-		go func() {
-			err := a.manager.Stop(context.Background())
-			a.window.Update(func() {
-				if err != nil {
-					a.Model.DNSStatus = "Stop needs recovery on next launch: " + err.Error()
-				} else {
-					a.Model.DNSStatus = "DNS test is stopped and original DNS is verified"
-				}
-			})
-		}()
-	}
-	if a.manager != nil {
-		if events := a.manager.Errors(); events != nil {
-			go func() {
-				for err := range events {
-					a.window.Update(func() {
-						a.Model.DNSStatus = "DNS proxy event: " + err.Error()
-					})
-				}
-			}()
-		}
+	a.Model.Dispatch = a.window.Update
+	a.Model.OnSafeToQuit = a.finishQuit
+	if picker, ok := a.Model.Picker.(interface{ SetParent(*mygo.Window) }); ok {
+		picker.SetParent(a.window)
 	}
 	tray, err := mygo.NewTray(mygo.TrayOptions{
 		Icon:           trayIcon(),
 		IconIsTemplate: true,
-		ToolTip:        "mHost Phase 0",
+		ToolTip:        "mHost Phase 1",
 		Menu: mygo.NewMenu([]*mygo.MenuItem{
 			{Label: "Open mHost", Click: func(*mygo.MenuItem, *mygo.Window) { a.showWindow() }},
 			mygo.Separator(),
@@ -154,7 +123,7 @@ func (a *App) ready() {
 		}),
 	})
 	if err != nil {
-		a.Model.DNSStatus = "Tray unavailable: " + err.Error()
+		a.Model.Problem = classifyUIError("create_tray", err)
 		return
 	}
 	a.tray = tray

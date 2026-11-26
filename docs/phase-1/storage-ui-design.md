@@ -1,6 +1,6 @@
 # Phase 1 Storage Workbench UI 与服务契约
 
-关联 issue：#13。功能实现由 #14 按本文契约完成；本文不包含界面或存储实现。
+关联 issue：#13。本阶段已实现本文对应的 MyGo UI、交互状态机和内存 Demo Service；#14 按同一契约实现真实存储并替换 Demo Service。本文中的界面与回执用于 UI 验证，不代表已经读写磁盘。
 
 ## 1. 目标与边界
 
@@ -206,7 +206,7 @@ UI Model 至少保存：`phase`、当前 Workspace、Summary、选中 Tab、操�
 
 ## 6. UI—应用服务契约
 
-以下为 #14 实现的逻辑契约，建议放在应用层（如 `internal/app`），`internal/desktop` 只依赖该层。类型可分为多个 Go 文件，但语义和调用顺序不得削弱。
+以下契约已在 `internal/app` 定义，并由 `internal/app/demo` 提供纯内存实现，`internal/desktop` 只依赖该层。#14 的真实 StorageService 不得削弱这些语义和调用顺序。
 
 ### 6.1 DirectoryPicker
 
@@ -234,6 +234,7 @@ type DirectoryOptions struct {
 ```go
 type StorageService interface {
     Inspect(ctx context.Context, sourceRoot string) (Workspace, error)
+    Refresh(ctx context.Context, workspaceID string) (Workspace, error)
     CreateWorkspace(ctx context.Context, sourceID, destinationRoot string) (Workspace, error)
 
     PreviewMigration(ctx context.Context, workspaceID string) (MigrationPlan, error)
@@ -249,7 +250,7 @@ type StorageService interface {
 
 调用约束：
 
-- `Inspect` 返回的 Workspace 为只读；`CreateWorkspace` 返回的 Workspace 为可写。
+- `Inspect` 返回的 Workspace 为只读；`CreateWorkspace` 返回的 Workspace 为可写；`Refresh` 按 Workspace ID 重新读取并保持其访问模式。
 - 后续方法只接受不透明 Workspace ID，不接受 UI 自拼文件路径。
 - `CreateWorkspace` 必须重新验证源状态和目录边界，不能信任 picker 或先前 UI 校验。
 - Preview 与 Apply/Save 通过 ID 和 Base Revision 配对；过期、重复或不属于当前 Workspace 的 ID 返回 `ErrorKindStaleOperation`。

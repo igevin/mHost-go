@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -10,6 +11,28 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/igevin/mHost-go/internal/hostsfixture"
 )
+
+type fakeDNSManager struct {
+	running    bool
+	startCalls int
+	stopCalls  int
+}
+
+func (f *fakeDNSManager) Start(context.Context) error {
+	f.startCalls++
+	f.running = true
+	return nil
+}
+
+func (f *fakeDNSManager) Stop(context.Context) error {
+	f.stopCalls++
+	f.running = false
+	return nil
+}
+
+func (f *fakeDNSManager) Running() bool { return f.running }
+
+func (f *fakeDNSManager) Errors() <-chan error { return nil }
 
 func testModel(t *testing.T) *Model {
 	t.Helper()
