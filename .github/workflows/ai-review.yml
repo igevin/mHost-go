@@ -4,7 +4,11 @@
 # 按 mHost-go 的技术栈改写。与参考实现的关键差异见文末「与参考实现的差异」。
 #
 # 评审标准在 .github/ai-review-prompt.md，防线在 .github/ai-review/guard.ts，
-# 两者都**只信任 base 分支的版本**——PR 里的副本不可信。
+# 两者都**只信任 base 分支 tip 的版本**——PR 里的副本不可信。
+#
+# 工作流本身也必须来自 base：用 pull_request_target 而非 pull_request。
+# 后者执行的是 PR 分支里的工作流定义，PR 作者改一行就能摘掉防线、拿着
+# secrets 跑任意内容。详见 on: 处的说明。
 #
 # Secrets：
 #   AI_REVIEW_API_KEY   兼容端点的 API Key（必填，挂在 LLM environment 上）
@@ -13,9 +17,10 @@
 #
 # Variables（可选，均有默认值）：
 #   AI_REVIEW_MAX_DIFF_LINES   diff 上限（行数），默认 2000
-#   AI_REVIEW_MODEL            审查模型 ID，默认 MiniMax-M2.7
+#   AI_REVIEW_MODEL            审查模型 ID，默认 MiniMax-M3.1-Flash
 #   AI_REVIEW_BASE_URL         OpenAI 兼容端点基址，默认 https://api.minimaxi.com/v1
-#   AI_REVIEW_CONTEXT_WINDOW   模型上下文长度，默认 204800（= M2.7 真实上限）
+#   AI_REVIEW_THINKING         思考档位，默认 low
+#   AI_REVIEW_CONTEXT_WINDOW   模型上下文长度；留空 = 按模型自动推导
 #
 # 与参考实现的差异：
 #   1. 发布身份：参考实现用 github.token（github-actions[bot]）发普通 PR 评论；
@@ -24,15 +29,37 @@
 #      是因为 gevinyu 在本仓库有 write 权限——一旦让 AI 发 APPROVE，等于把合并
 #      判定权交给模型，prompt injection 可以直接伪造放行。COMMENTED review
 #      不计入 mergeability，审查只提供信息，不构成门禁。
-#   2. guard / prompt 没有内嵌副本：参考实现在 workflow 里嵌了一份 guard 以便
-#      bootstrap，本实现选择 fail closed——base 缺失即报错退出，避免两份副本
-#      需要人工同步（参考实现自己的注释也承认这是维护债）。
-#   3. diff 超限的「核心目录」改为 Go 项目的路径集合。
+#   2. 触发器用 pull_request_target：参考实现用 pull_request，执行的是 PR 分支
+#      里的工作流定义——PR 作者改一行 ai-review.yml 就能摘掉 guard、让带 secrets
+#      的 job 执行任意内容。pull_request_target 执行 base 分支的定义，配合
+#      「PR 内容只读不执行」的设计，构成「可信程序 + 不可信数据」。
+#   3. guard / prompt 没有内嵌副本：参考实现在 workflow 里嵌了一份 guard 以便
+#      bootstrap，本实现不留副本，base tip 缺失即报错退出，避免两份副本需要
+#      人工同步（参考实现自己的注释也承认这是维护债）。代价是引入本工作流的
+#      那次 PR（bootstrap）拿不到 AI 审查。
+#   4. diff 超限的「核心目录」改为 Go 项目的路径集合。
+#   5. 横幅措辞与实际行为严格对应：审查范围与是否截断是两个独立维度，不再
+#      互相覆盖。
 
 name: AI Code Review
 
 on:
-  pull_request:
+  # 用 pull_request_target 而不是 pull_request：前者执行的是 **base 分支**的
+  # 工作流定义，后者执行的是 **PR 分支**里的定义。
+  # 这一条是整个审查体系的安全前提——PR 作者只要在自己的分支里改一行
+  # ai-review.yml（摘掉 -e guard、把 --api-key 改成往 step summary 里写），
+  # 就能在带 secrets 的环境里跑任意内容。git show "$BASE:guard.ts" 那层
+  # 防线护的是「审查依据」，护不了「审查程序本身」。
+  #
+  # pull_request_target 的风险面（拿 base 的 token 跑 PR 代码）在本工作流里
+  # 不成立：PR 内容只被**读取**（diff + 只读工具 read/grep/find/ls），从不
+  # 被执行；项目级 agent 配置在运行前清除；/proc、/sys、/dev 读被 guard 封禁。
+  # 即「可信程序 + 不可信数据」。
+  #
+  # 代价：引入本工作流的那次 PR（bootstrap）拿不到 AI 审查——那时 base 分支
+  # 上还没有这个工作流，pull_request_target 不会触发。有意取舍：宁可少审一次，
+  # 不可让 PR 自带审查逻辑。
+  pull_request_target:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
@@ -106,6 +133,17 @@ jobs:
             echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Require trusted workflow ref
+        # workflow_dispatch 可以在 UI/API 里选任意 ref，选中 PR 分支就等于
+        # 用 PR 自带的审查逻辑跑一次带 secrets 的审查——和 pull_request 触发
+        # 同样的洞。强制只能从默认分支触发。
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${{ github.ref_name }}" != "${{ github.event.repository.default_branch }}" ]; then
+            echo "::error::手动复审必须从默认分支 ${{ github.event.repository.default_branch }} 触发（当前 ref：${{ github.ref_name }}）——否则执行的是 PR 自带的工作流定义。"
+            exit 1
+          fi
+
       - name: Check AI review prerequisites
         id: gate
         env:
@@ -152,14 +190,20 @@ jobs:
           fi
           # 工作树钉住触发事件的 head，运行期间新 push 不会改变检出内容
           git checkout -q "$head"
+          # base = merge-base：算 diff 的基准（PR 实际改了什么）
           base=$(git merge-base "refs/remotes/origin/${base_ref}" "$head")
+          # base_tip = base 分支的当前 tip：**可信源**。工作流定义本身来自
+          # base 分支（pull_request_target 语义），所以要恢复的审查依据
+          # （guard / prompt / 约定文件）也必须取自 base tip，而不是
+          # merge-base——PR 分支可能落后于 base，merge-base 上还没有这些文件。
+          base_tip=$(git rev-parse "refs/remotes/origin/${base_ref}")
           echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "base_tip=$base_tip" >> "$GITHUB_OUTPUT"
           echo "head=$head" >> "$GITHUB_OUTPUT"
 
       - name: Sanitize untrusted PR files
         env:
-          BASE: ${{ steps.refs.outputs.base }}
-          HEAD: ${{ steps.refs.outputs.head }}
+          BASE_TIP: ${{ steps.refs.outputs.base_tip }}
         run: |
           # PR 检出树是不可信输入：项目级 agent 配置目录会在 agent 模式下被
           # 自动执行/加载，而 workflow_dispatch 复审 fork PR 是设计内场景——
@@ -169,22 +213,20 @@ jobs:
           rm -rf .claude .mcp.json .pi
           # 项目约定文件同样只信 base 版本
           find . -not -path './.git/*' \( -name 'CLAUDE.md' -o -name 'CLAUDE.local.md' -o -name 'AGENTS.md' \) -delete
-          git show "$BASE:CLAUDE.md" > CLAUDE.md 2>/dev/null || true
-          git show "$BASE:AGENTS.md" > AGENTS.md 2>/dev/null || true
-          # guard 扩展：优先用 base 版本（可信）。先从工作树删除（防 PR 里的
+          git show "$BASE_TIP:CLAUDE.md" > CLAUDE.md 2>/dev/null || true
+          git show "$BASE_TIP:AGENTS.md" > AGENTS.md 2>/dev/null || true
+          # guard 扩展：只信 base 分支 tip 的版本。先从工作树删除（防 PR 里的
           # 副本被任何途径加载），再恢复到 runner 临时目录。
+          #
+          # 不回退到 PR head 版本：pull_request_target 下工作流定义来自 base，
+          # base 有工作流就必然有配套的 guard（两者同一个 PR 引入）。base 没有
+          # 说明有人把防线从 master 上删了——此时必须 fail closed，而不是
+          # 改信 PR 作者提供的版本。
           rm -f .github/ai-review/guard.ts
-          git show "$BASE:.github/ai-review/guard.ts" > "$RUNNER_TEMP/ai-review-guard.ts" 2>/dev/null || true
-          if [ ! -s "$RUNNER_TEMP/ai-review-guard.ts" ]; then
-            # base 还没有 = 审查体系首次引入的 bootstrap PR，head 版本与 base
-            # 版本出自同一批提交，可安全回退。base 一旦合入就永远走 base 这条
-            # 可信路径。fork PR 根本不会被审查（job 级 if 已跳过），所以这个
-            # 回退窗口不会与「fork 作者植入弱化版 guard」重叠。
-            git show "$HEAD:.github/ai-review/guard.ts" > "$RUNNER_TEMP/ai-review-guard.ts" 2>/dev/null || true
-          fi
+          git show "$BASE_TIP:.github/ai-review/guard.ts" > "$RUNNER_TEMP/ai-review-guard.ts" 2>/dev/null || true
           # 防线自校验：文件缺失或被掏空即拒绝运行审查（防静默失效）。
           if [ ! -s "$RUNNER_TEMP/ai-review-guard.ts" ] || ! grep -q "tool_call" "$RUNNER_TEMP/ai-review-guard.ts"; then
-            echo "::error::base 与 PR head 都没有可用的 .github/ai-review/guard.ts（或内容被掏空）——拒绝在无防线状态下运行审查。"
+            echo "::error::base 分支缺少可用的 .github/ai-review/guard.ts（或内容被掏空）——拒绝在无防线状态下运行审查。guard.ts 必须与本工作流一同存在于 base 分支。"
             exit 1
           fi
 
@@ -193,6 +235,7 @@ jobs:
         env:
           BASE: ${{ steps.refs.outputs.base }}
           HEAD: ${{ steps.refs.outputs.head }}
+          BASE_TIP: ${{ steps.refs.outputs.base_tip }}
         run: |
           # 上限变量仅管理员可控，但仍防手滑配成非数字让 -gt 直接报错
           case "$MAX_DIFF_LINES" in
@@ -203,37 +246,44 @@ jobs:
           esac
           git diff "$BASE" "$HEAD" > pr.diff
           total=$(wc -l < pr.diff | tr -d ' ')
+          # 两个独立维度，横幅措辞必须与实际发生的事一一对应：
+          #   mode      —— 审查范围：full / core-only / fallback-full
+          #   truncated —— 是否真的按行数截断了内容（true / false）
+          # 早期版本把两者塞进一个 mode，导致「只审了核心目录」和「内容被截断」
+          # 互相覆盖，横幅说的事和实际做的不符。
           mode=full
+          truncated=false
           if [ "$total" -gt "$MAX_DIFF_LINES" ]; then
             # 超限降级：Go 核心包 + 依赖清单 + CI 工作流与构建脚本——
             # 对审查器而言这是最该覆盖的供应链面，超限 PR 不能靠凑行数躲开
             # 对它们的改动。
-            mode=core-only
             git diff "$BASE" "$HEAD" -- internal cmd go.mod go.sum .github/workflows scripts mygo.json > pr.diff || true
-            total=$(wc -l < pr.diff | tr -d ' ')
-            if [ "$total" -eq 0 ]; then
-              # PR 完全不碰核心目录时退回全量 diff 截断
-              mode=truncated
+            core_total=$(wc -l < pr.diff | tr -d ' ')
+            if [ "$core_total" -eq 0 ]; then
+              # PR 完全不碰核心目录 → 退回审完整 diff（下面统一按行数截断）。
+              mode=fallback-full
               git diff "$BASE" "$HEAD" > pr.diff
+            else
+              mode=core-only
             fi
           fi
+          # 统一截断：full / core-only / fallback-full 都可能仍超限。
+          # 只有真的动了手才标 truncated——横幅说什么必须等于发生了什么。
           if [ "$(wc -l < pr.diff | tr -d ' ')" -gt "$MAX_DIFF_LINES" ]; then
-            mode=truncated
+            truncated=true
             head -n "$MAX_DIFF_LINES" pr.diff > pr.diff.part
             mv pr.diff.part pr.diff
           fi
-          # 评审标准优先用 base 版本：PR 作者可以在自己的分支里改写「什么算
-          # bug」，让审查变成橡皮图章。base 还没有 = bootstrap PR（引入审查
-          # 体系的那次提交），此时 head 版本与 base 版本同批，可安全回退。
-          git show "$BASE:.github/ai-review-prompt.md" > ai-review-prompt.md 2>/dev/null || true
+          # 评审标准只信 base 分支 tip 的版本：PR 作者可以在自己的分支里改写
+          # 「什么算 bug」，让审查变成橡皮图章。base tip 没有 = 审查标准被人从
+          # master 上删了 —— fail closed，不回退到 PR 作者提供的版本。
+          git show "$BASE_TIP:.github/ai-review-prompt.md" > ai-review-prompt.md 2>/dev/null || true
           if [ ! -s ai-review-prompt.md ]; then
-            git show "$HEAD:.github/ai-review-prompt.md" > ai-review-prompt.md 2>/dev/null || true
-          fi
-          if [ ! -s ai-review-prompt.md ]; then
-            echo "::error::base 与 PR head 都没有 .github/ai-review-prompt.md——拒绝在无评审标准的状态下运行审查。"
+            echo "::error::base 分支缺少 .github/ai-review-prompt.md——拒绝在无评审标准的状态下运行审查。"
             exit 1
           fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "truncated=$truncated" >> "$GITHUB_OUTPUT"
           echo "lines=$(wc -l < pr.diff | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Resolve previous AI review
@@ -403,6 +453,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GEVINYU_TOKEN }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           MODE: ${{ steps.diff.outputs.mode }}
+          TRUNCATED: ${{ steps.diff.outputs.truncated }}
           REVIEWED_SHA: ${{ steps.refs.outputs.head }}
         run: |
           {
@@ -412,11 +463,17 @@ jobs:
             echo
             echo "> 被审查的 head：\`$REVIEWED_SHA\`"
             echo
-            if [ "$MODE" = "core-only" ]; then
-              echo "> ⚠️ diff 超过 ${MAX_DIFF_LINES} 行，本次仅审查核心目录（internal、cmd、依赖清单、CI 工作流与构建脚本），其余变更未覆盖。"
-              echo
-            elif [ "$MODE" = "truncated" ]; then
+            # 措辞 = 实际发生的事。截断与范围是两个独立维度，可能同时成立，
+            # 所以分开写、各自只在真的成立时出现。
+            if [ "$TRUNCATED" = "true" ]; then
               echo "> ⚠️ diff 超过 ${MAX_DIFF_LINES} 行，超出部分被截断，审查可能不完整。"
+              echo
+            fi
+            if [ "$MODE" = "core-only" ]; then
+              echo "> ⚠️ 本次仅审查核心目录（internal、cmd、依赖清单、CI 工作流与构建脚本），其余变更未覆盖。"
+              echo
+            elif [ "$MODE" = "fallback-full" ]; then
+              echo "> ℹ️ 本次改动不涉及核心目录，已改为审查完整 diff（仍受 ${MAX_DIFF_LINES} 行上限约束）。"
               echo
             fi
             cat report.md
