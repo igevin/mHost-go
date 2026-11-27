@@ -1,9 +1,10 @@
-# Phase 2 打包流水线：在 macOS arm64 runner 上产出 .app / DMG / 校验和并上传 artifact。
+# Alpha 打包流水线：在 macOS arm64 runner 上产出 .app / DMG / 校验和并上传 artifact。
+# 产物为 Hosts-only Alpha（自签名 adhoc），供 M 系列 Mac 真机验证（#27）。
 #
 # 职责边界：gofmt / go vet / go test / go test -race 这些检查由 ci.yml 负责
 # （ubuntu runner，更快更便宜，每个 PR 和 master push 都跑）。本文件只保留
 # 必须在 macOS 上做的打包、签名与包内校验，避免 macOS 分钟被重复的检查步骤吃掉。
-name: Phase 2 validation
+name: Alpha packaging
 
 on:
   pull_request:
@@ -29,10 +30,10 @@ jobs:
         run: ./scripts/build-darwin-arm64.sh
       - name: Verify packaged app
         run: ./scripts/verify-darwin-arm64.sh
-      - name: Upload Phase 2 artifacts
+      - name: Upload Alpha artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: mhost-phase-2-darwin-arm64
+          name: mhost-alpha-darwin-arm64
           path: |
             build/darwin-arm64/*.app
             build/darwin-arm64/*.dmg

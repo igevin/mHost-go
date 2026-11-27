@@ -1,8 +1,8 @@
 {
-  "name": "mHost Phase 2",
-  "slug": "mhost-phase-2",
-  "identifier": "com.github.igevin.mhost.phase2",
-  "version": "0.0.0",
+  "name": "mHost",
+  "slug": "mhost",
+  "identifier": "com.github.igevin.mhost",
+  "version": "0.3.0-alpha",
   "main": "./cmd/mhost",
   "out": "build",
   "macos": {
