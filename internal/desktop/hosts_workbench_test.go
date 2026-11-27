@@ -186,7 +186,10 @@ func TestHostsWorkbenchConflictsBlockApplyUntilResolved(t *testing.T) {
 	if model.ApplyBlockedReason() == "" {
 		t.Fatal("unresolved conflicts should block apply with a reason")
 	}
-	model.ChooseResolution("api.demo.test", "10.0.0.1")
+	model.ChooseResolution("api.demo.test", "192.168.1.1")
+	if model.Staged == nil || !strings.Contains(model.Staged.MergedBlock, "192.168.1.1 api.demo.test") {
+		t.Fatalf("staged preview did not re-render with the chosen IP: %+v", model.Staged)
+	}
 	if model.ApplyBlockedReason() != "" {
 		t.Fatalf("apply still blocked: %q", model.ApplyBlockedReason())
 	}

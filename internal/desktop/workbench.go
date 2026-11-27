@@ -539,7 +539,7 @@ func classifyUIError(operation string, err error) *app.UIError {
 	if errors.Is(err, app.ErrStaleOperation) {
 		kind = app.ErrorStale
 	}
-	return &app.UIError{Kind: kind, Operation: operation, Message: "Storage operation failed", Detail: fmt.Sprint(err), Retryable: true, Preservation: app.PreserveUnknown}
+	return &app.UIError{Kind: kind, Operation: operation, Message: "Operation failed", Detail: fmt.Sprint(err), Retryable: true, Preservation: app.PreserveUnknown}
 }
 
 func (m *WorkbenchModel) finishOperation() {

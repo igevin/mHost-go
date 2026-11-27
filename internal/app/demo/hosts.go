@@ -154,7 +154,7 @@ func (s *HostsService) SaveProfile(ctx context.Context, profileID string, conten
 	}, nil
 }
 
-func (s *HostsService) PreviewApply(ctx context.Context, profileID string) (app.ApplyPlan, error) {
+func (s *HostsService) PreviewApply(ctx context.Context, profileID string, resolutions map[string]string) (app.ApplyPlan, error) {
 	if err := ctx.Err(); err != nil {
 		return app.ApplyPlan{}, err
 	}
@@ -167,7 +167,7 @@ func (s *HostsService) PreviewApply(ctx context.Context, profileID string) (app.
 	rules := parseRules(profile.content)
 	conflicts := findConflicts(rules)
 	blockers := findBlockers(rules)
-	merged := managedBlockHeader + renderMerged(rules, nil) + managedBlockFooter
+	merged := managedBlockHeader + renderMerged(rules, validResolutions(conflicts, resolutions)) + managedBlockFooter
 	plan := &hostsPlan{
 		id:           s.nextID("plan"),
 		profileID:    profile.id,
@@ -378,6 +378,13 @@ func parseRules(content string) []demoRule {
 				continue
 			}
 		}
+		if comment := strings.IndexByte(line, '#'); comment >= 0 {
+			line = line[:comment]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
 			continue
@@ -465,6 +472,21 @@ func validateResolutions(conflicts []app.Conflict, resolutions map[string]string
 		}
 	}
 	return nil
+}
+
+// validResolutions keeps only entries that match a real conflict choice, so a
+// preview renders pending user choices while ignoring stale or invalid ones.
+func validResolutions(conflicts []app.Conflict, resolutions map[string]string) map[string]string {
+	if len(resolutions) == 0 {
+		return nil
+	}
+	valid := map[string]string{}
+	for _, conflict := range conflicts {
+		if choice, ok := resolutions[conflict.Domain]; ok && contains(conflict.IPs, choice) {
+			valid[conflict.Domain] = choice
+		}
+	}
+	return valid
 }
 
 // renderMerged renders the active rules of the managed block. Same-IP

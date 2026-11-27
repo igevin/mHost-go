@@ -22,7 +22,10 @@ type HostsService interface {
 	// PreviewApply builds the plan that would rewrite the managed block to
 	// this profile's content. Blockers (unparseable rules) come back in the
 	// plan with Blockers set; cross-IP conflicts come back with Conflicts set.
-	PreviewApply(ctx context.Context, profileID string) (ApplyPlan, error)
+	// resolutions carries pending keep-choices (domain -> IP) so the preview
+	// renders the merged block as it would be written; unresolved conflicts
+	// render with the first IP kept.
+	PreviewApply(ctx context.Context, profileID string, resolutions map[string]string) (ApplyPlan, error)
 	// Apply executes a previously previewed plan. Plans expire with the
 	// profile revision. Conflicts must be resolved: resolutions maps each
 	// conflicting domain to the IP to keep; missing or invalid entries fail

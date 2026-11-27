@@ -51,7 +51,7 @@ func TestHostsServiceSaveProfileRejectsStaleBase(t *testing.T) {
 
 func TestHostsServicePreviewApplyCleanProfile(t *testing.T) {
 	service := NewHostsService()
-	plan, err := service.PreviewApply(context.Background(), "dev")
+	plan, err := service.PreviewApply(context.Background(), "dev", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestHostsServicePreviewApplyCleanProfile(t *testing.T) {
 
 func TestHostsServicePreviewApplyDetectsConflicts(t *testing.T) {
 	service := NewHostsService()
-	plan, err := service.PreviewApply(context.Background(), "conflict")
+	plan, err := service.PreviewApply(context.Background(), "conflict", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,9 +91,23 @@ func TestHostsServicePreviewApplyDetectsConflicts(t *testing.T) {
 	}
 }
 
+func TestHostsServicePreviewRendersPendingResolutions(t *testing.T) {
+	service := NewHostsService()
+	plan, err := service.PreviewApply(context.Background(), "conflict", map[string]string{"api.demo.test": "192.168.1.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.MergedBlock, "192.168.1.1 api.demo.test") {
+		t.Fatalf("merged block = %q", plan.MergedBlock)
+	}
+	if strings.Contains(plan.MergedBlock, "10.0.0.1 api.demo.test") {
+		t.Fatalf("dropped conflict line still rendered: %q", plan.MergedBlock)
+	}
+}
+
 func TestHostsServicePreviewApplyReportsBlockers(t *testing.T) {
 	service := NewHostsService()
-	plan, err := service.PreviewApply(context.Background(), "broken")
+	plan, err := service.PreviewApply(context.Background(), "broken", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,10 +116,24 @@ func TestHostsServicePreviewApplyReportsBlockers(t *testing.T) {
 	}
 }
 
+func TestHostsServiceInlineCommentsAreNotDomains(t *testing.T) {
+	service := NewHostsService()
+	plan, err := service.PreviewApply(context.Background(), "dev", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.MergedBlock, "127.0.0.1 localhost\n") {
+		t.Fatalf("merged block = %q", plan.MergedBlock)
+	}
+	if strings.Contains(plan.MergedBlock, "loopback") {
+		t.Fatalf("inline comment leaked into merged block: %q", plan.MergedBlock)
+	}
+}
+
 func TestHostsServiceApplySuccess(t *testing.T) {
 	service := NewHostsService()
 	ctx := context.Background()
-	plan, err := service.PreviewApply(ctx, "dev")
+	plan, err := service.PreviewApply(ctx, "dev", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +174,7 @@ func TestHostsServiceApplySuccess(t *testing.T) {
 func TestHostsServiceApplyRejectsUnresolvedConflicts(t *testing.T) {
 	service := NewHostsService()
 	ctx := context.Background()
-	plan, err := service.PreviewApply(ctx, "conflict")
+	plan, err := service.PreviewApply(ctx, "conflict", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +199,7 @@ func TestHostsServiceApplyRejectsUnresolvedConflicts(t *testing.T) {
 func TestHostsServiceApplyRejectsInvalidResolution(t *testing.T) {
 	service := NewHostsService()
 	ctx := context.Background()
-	plan, err := service.PreviewApply(ctx, "conflict")
+	plan, err := service.PreviewApply(ctx, "conflict", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +213,7 @@ func TestHostsServiceApplyRejectsInvalidResolution(t *testing.T) {
 func TestHostsServiceApplyRejectsStalePlan(t *testing.T) {
 	service := NewHostsService()
 	ctx := context.Background()
-	plan, err := service.PreviewApply(ctx, "dev")
+	plan, err := service.PreviewApply(ctx, "dev", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +232,7 @@ func TestHostsServiceApplyRejectsStalePlan(t *testing.T) {
 func TestHostsServiceApplyFailureOffersRollback(t *testing.T) {
 	service := NewHostsService()
 	ctx := context.Background()
-	plan, err := service.PreviewApply(ctx, "dev")
+	plan, err := service.PreviewApply(ctx, "dev", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +277,7 @@ func TestHostsServiceApplyFailureOffersRollback(t *testing.T) {
 func TestHostsServiceReadbackMismatchIsReported(t *testing.T) {
 	service := NewHostsService()
 	ctx := context.Background()
-	plan, err := service.PreviewApply(ctx, "dev")
+	plan, err := service.PreviewApply(ctx, "dev", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

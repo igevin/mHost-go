@@ -142,25 +142,38 @@ func (m *HostsWorkbenchModel) CancelSwitch() {
 }
 
 func (m *HostsWorkbenchModel) switchToProfile(profileID string) {
-	m.loadProfileIntoEditor(profileID)
+	m.PendingSwitch = ""
+	if draft, ok := m.drafts[profileID]; ok {
+		m.presentDraft(profileID, draft)
+		return
+	}
+	id, ctx := m.beginOperation()
+	m.Phase = HostsPhaseLoading
+	m.Problem = nil
+	m.runAsync(func() {
+		detail, err := m.Service.LoadProfile(ctx, profileID)
+		m.dispatch(func() {
+			if !m.current(id) {
+				return
+			}
+			if err != nil {
+				m.setError("load_profile", err)
+				return
+			}
+			draft := &hostsDraft{content: detail.Content, savedContent: detail.Content, revision: detail.Revision}
+			m.drafts[profileID] = draft
+			m.presentDraft(profileID, draft)
+			m.Phase = HostsPhaseIdle
+			m.finishOperation()
+		})
+	})
 }
 
-func (m *HostsWorkbenchModel) loadProfileIntoEditor(profileID string) {
+func (m *HostsWorkbenchModel) presentDraft(profileID string, draft *hostsDraft) {
 	m.SelectedID = profileID
 	m.Staged = nil
 	m.PlanStale = false
 	m.Resolutions = map[string]string{}
-	m.PendingSwitch = ""
-	draft, ok := m.drafts[profileID]
-	if !ok {
-		detail, err := m.Service.LoadProfile(context.Background(), profileID)
-		if err != nil {
-			m.setError("load_profile", err)
-			return
-		}
-		draft = &hostsDraft{content: detail.Content, savedContent: detail.Content, revision: detail.Revision}
-		m.drafts[profileID] = draft
-	}
 	m.Editor.ReadOnly = m.profileProtected(profileID)
 	m.Editor.Buffer.Reset(draft.content)
 	m.diagnosticVersion = 0
@@ -243,8 +256,12 @@ func (m *HostsWorkbenchModel) PreviewApply() {
 	m.Phase = HostsPhasePreviewing
 	m.Problem = nil
 	profileID := m.SelectedID
+	resolutions := map[string]string{}
+	for domain, ip := range m.Resolutions {
+		resolutions[domain] = ip
+	}
 	m.runAsync(func() {
-		plan, err := m.Service.PreviewApply(ctx, profileID)
+		plan, err := m.Service.PreviewApply(ctx, profileID, resolutions)
 		m.dispatch(func() {
 			if !m.current(id) {
 				return
@@ -255,7 +272,7 @@ func (m *HostsWorkbenchModel) PreviewApply() {
 			}
 			m.Staged = &plan
 			m.PlanStale = false
-			m.Resolutions = map[string]string{}
+			m.Resolutions = resolutions
 			m.Phase = HostsPhaseIdle
 			m.finishOperation()
 		})
@@ -276,6 +293,10 @@ func (m *HostsWorkbenchModel) ChooseResolution(domain, ip string) {
 		return
 	}
 	m.Resolutions[domain] = ip
+	// Re-render the preview so the staged diff matches what Apply will write.
+	if !m.busy() && !m.Modified() {
+		m.PreviewApply()
+	}
 }
 
 // ApplyBlockedReason returns why Apply is disabled, or "" when it is allowed.

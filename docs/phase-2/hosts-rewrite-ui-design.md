@@ -137,7 +137,7 @@ type HostsService interface {
     ListProfiles(ctx context.Context) ([]HostsProfile, error)
     LoadProfile(ctx context.Context, profileID string) (HostsProfileDetail, error)
     SaveProfile(ctx context.Context, profileID string, content string, baseRevision uint64) (HostsProfileDetail, error)
-    PreviewApply(ctx context.Context, profileID string) (ApplyPlan, error)
+    PreviewApply(ctx context.Context, profileID string, resolutions map[string]string) (ApplyPlan, error)
     Apply(ctx context.Context, planID string, resolutions map[string]string) (ApplyReceipt, error)
     Rollback(ctx context.Context, backupID string) (ApplyReceipt, error)
     ListApplyBackups(ctx context.Context) ([]ApplyBackupRef, error)
@@ -148,13 +148,14 @@ type HostsService interface {
 调用约束：
 
 - `SaveProfile` 的 `baseRevision` 必须与 Load 时一致，否则 `ErrStaleOperation`。
+- `PreviewApply` 与 `Apply` 都接受 `resolutions`（domain → 保留的 IP）。预览按待选选择渲染 MergedBlock，未解决的冲突按保留首个 IP 渲染；用户每做一次保留选择，UI 重新预览，使 staged diff 与最终写入一致。
 - `PreviewApply` 返回的计划携带 `BaseRevision`；Profile Revision 变化后旧 Plan ID 必须返回 `ErrStaleOperation`。
-- `Apply` 的 `resolutions` 覆盖全部冲突域（domain → 保留的 IP），缺失或非法返回 `ErrorValidation`；存在 blocker 时同样拒绝。
+- `Apply` 要求 `resolutions` 覆盖全部冲突域，缺失或非法返回 `ErrorValidation`；存在 blocker 时同样拒绝。
 - `Apply`/`Rollback` 即使返回 error 也返回非零回执，表达已完成的原子步骤；调用方不得只凭 error 推断状态。
 - 每次 Apply 必须先创建备份；备份失败不得改写管理块。
 - `AppliedState` 返回管理块当前归属与 drift 标记。
 
-相对 #16 issue 正文的契约有一处微调：`Apply` 增加了 `resolutions map[string]string` 参数（冲突的保留选择挂在 Apply 上，而非 PreviewApply 上），已在 #16 评论同步。
+相对 #16 issue 正文的契约有两处微调，均已在 #16 评论同步：`Apply` 与 `PreviewApply` 均增加 `resolutions map[string]string` 参数（冲突的保留选择同时驱动预览渲染与最终写入）。
 
 ## 7. Demo 场景
 
