@@ -422,38 +422,31 @@ func TestAlphaModelWiresPickerAndExposesIt(t *testing.T) {
 	}
 }
 
-func TestExportImportSetBusyPhase(t *testing.T) {
+func TestExportImportBusyGuardsAndPhaseRestore(t *testing.T) {
 	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
 	exportDir := t.TempDir()
 	model := newAdminWorkbench(t, svc)
 	model.Load()
 	model.SelectProfile(model.Profiles[0].ID)
-	model.Picker = blockingPicker{dir: exportDir, release: make(chan struct{})}
+	model.Picker = fakePicker{dir: exportDir}
 
-	go model.ExportSelected()
-	deadline := time.Now().Add(2 * time.Second)
-	for !model.busy() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	// 忙碌中拒绝再进导出（busy guard 生效）
+	model.Phase = HostsPhaseApplying
+	model.ExportSelected()
+	if model.Info != "" {
+		t.Fatal("export should refuse while busy")
 	}
-	if !model.busy() {
-		t.Fatal("export should set busy phase while picker is open")
-	}
-	model.Picker.(blockingPicker).release <- struct{}{}
-	deadline = time.Now().Add(2 * time.Second)
-	for model.busy() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	model.Phase = HostsPhaseIdle
+
+	// 完成后相位恢复 Idle（busy 态曾进入）
+	model.ExportSelected()
+	if model.Problem != nil {
+		t.Fatalf("export problem = %+v", model.Problem)
 	}
 	if model.busy() {
-		t.Fatal("export should clear busy phase after completion")
+		t.Fatal("phase should restore to idle after export")
 	}
-}
-
-type blockingPicker struct {
-	dir     string
-	release chan struct{}
-}
-
-func (p blockingPicker) PickDirectory(ctx context.Context, opts app.DirectoryOptions) (string, error) {
-	<-p.release
-	return p.dir, nil
+	if model.Info == "" {
+		t.Fatal("export info missing")
+	}
 }
