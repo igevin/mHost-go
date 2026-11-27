@@ -68,7 +68,7 @@ func HostsDiagnostics(buffer *editor.Buffer) []editor.Diagnostic {
 			continue
 		}
 		if _, err := netip.ParseAddr(fields[0]); err != nil {
-			diagnostics = append(diagnostics, hostsDiagnostic(buffer, line, "invalid IP address"))
+			diagnostics = append(diagnostics, hostsDiagnostic(buffer, line, editor.SeverityError, "invalid IP address"))
 			continue
 		}
 		for _, domain := range fields[1:] {
@@ -78,24 +78,30 @@ func HostsDiagnostics(buffer *editor.Buffer) []editor.Diagnostic {
 				continue
 			}
 			if !previous.diagnosed {
-				diagnostics = append(diagnostics, hostsDiagnostic(buffer, previous.line, fmt.Sprintf("duplicate domain %q", domain)))
+				severity := editor.SeverityWarning
+				if previous.ip != fields[0] {
+					severity = editor.SeverityError
+				}
+				diagnostics = append(diagnostics, hostsDiagnostic(buffer, previous.line, severity, fmt.Sprintf("duplicate domain %q", domain)))
 				previous.diagnosed = true
 			}
 			kind := "same IP"
+			severity := editor.SeverityWarning
 			if previous.ip != fields[0] {
 				kind = "different IP"
+				severity = editor.SeverityError
 			}
-			diagnostics = append(diagnostics, hostsDiagnostic(buffer, line, fmt.Sprintf("duplicate domain %q (%s)", domain, kind)))
+			diagnostics = append(diagnostics, hostsDiagnostic(buffer, line, severity, fmt.Sprintf("duplicate domain %q (%s)", domain, kind)))
 		}
 	}
 	return diagnostics
 }
 
-func hostsDiagnostic(buffer *editor.Buffer, line int, message string) editor.Diagnostic {
+func hostsDiagnostic(buffer *editor.Buffer, line int, severity editor.Severity, message string) editor.Diagnostic {
 	return editor.Diagnostic{
 		Start:    buffer.Offset(editor.Pos{Line: line}),
 		End:      buffer.Offset(editor.Pos{Line: line}) + len(buffer.Line(line)),
-		Severity: editor.SeverityWarning,
+		Severity: severity,
 		Message:  message,
 		Source:   "hosts",
 	}
