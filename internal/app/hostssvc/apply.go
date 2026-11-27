@@ -301,6 +301,9 @@ func (s *Service) ListApplyBackups(ctx context.Context) ([]app.ApplyBackupRef, e
 
 // AppliedState 报告管理块当前归属与 drift：
 // 读系统 hosts → 提取管理块 → 哈希与 applied-state 比对。
+// 「无块」按空串参与哈希比较：应用空 profile（无管理块写入）后
+// 哈希相等不报 drift；记录非空但块被外部删除时哈希不等仍报 drift
+// （review 建议项：应用空规则集后不再误报漂移）。
 func (s *Service) AppliedState(ctx context.Context) (app.AppliedState, error) {
 	if err := ctx.Err(); err != nil {
 		return app.AppliedState{}, err
@@ -310,13 +313,16 @@ func (s *Service) AppliedState(ctx context.Context) (app.AppliedState, error) {
 		return app.AppliedState{}, &app.UIError{Kind: app.ErrorPermission, Message: "Cannot read system hosts file", Detail: err.Error(), Cause: err}
 	}
 	block, hasBlock := managedBlockText(string(content))
+	if !hasBlock {
+		block = ""
+	}
 
 	record, recErr := s.readAppliedState()
 	if recErr != nil || record.ProfileID == "" {
 		// 本服务无记录：块存在即 drift（外部/旧版应用写入）
 		return app.AppliedState{Drifted: hasBlock}, nil
 	}
-	drifted := !hasBlock || sha256HexString(block) != record.BlockSHA256
+	drifted := sha256HexString(block) != record.BlockSHA256
 	return app.AppliedState{
 		ProfileID:   record.ProfileID,
 		ProfileName: record.ProfileName,
