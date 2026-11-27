@@ -541,8 +541,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GEVINYU_TOKEN }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
-        run: gh api --method POST "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-          --raw-field body='AI 审查失败，详见 Actions 日志。'
+        run: |
+          # run 必须是块标量（|）：普通标量里行尾的 \ 续行会被 YAML 折叠成
+          # 空格，gh api 会收到一个字面 \ 参数而报 accepts 1 arg(s), received 3。
+          # 多行/含特殊字符的正文统一走 jq --arg + --input，与成功路径一致。
+          jq -n --arg body 'AI 审查失败，详见 Actions 日志。' '{body: $body}' > notice.json
+          gh api --method POST "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" --input notice.json
 
       - name: Post failure notice for unexpected errors
         # 覆盖 review 步骤之外的失败（检出、merge-base、护栏等基础设施
@@ -559,15 +563,14 @@ jobs:
           #   空     → 审查根本没开始（检出/merge-base/护栏等基础设施错误）
           #   failed → 审查跑了但失败（超时、端点报错、模型只吐思考链）
           if [ "$REVIEW_STATUS" = "ok" ]; then
-            gh api --method POST "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-              --raw-field body='AI 审查已完成，但结果发布失败；可在 Actions 对本次运行点 Re-run 重试发布。'
+            BODY='AI 审查已完成，但结果发布失败；可在 Actions 对本次运行点 Re-run 重试发布。'
           elif [ -z "$REVIEW_STATUS" ]; then
-            gh api --method POST "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-              --raw-field body='AI 审查流程中断（基础设施错误，审查尚未开始），详见 Actions 日志。'
+            BODY='AI 审查流程中断（基础设施错误，审查尚未开始），详见 Actions 日志。'
           else
-            gh api --method POST "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-              --raw-field body='AI 审查失败，详见 Actions 日志。'
+            BODY='AI 审查失败，详见 Actions 日志。'
           fi
+          jq -n --arg body "$BODY" '{body: $body}' > notice.json
+          gh api --method POST "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" --input notice.json
 
       - name: Mark job failed
         if: steps.review.outputs.status == 'failed'
