@@ -1,0 +1,4 @@
+# ---- mHost start ----
+127.0.0.1 managed.com
+# ---- mHost end ----
+127.0.0.1 outside.com

@@ -1,0 +1,26 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": "::ffff:192.0.2.1",
+      "domains": [
+        "mapped.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 2,
+      "ip": "fe80::1",
+      "domains": [
+        "link.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    }
+  ],
+  "errors": [],
+  "duplicates": []
+}

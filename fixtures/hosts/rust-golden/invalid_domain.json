@@ -1,0 +1,31 @@
+{
+  "rules": [],
+  "errors": [
+    {
+      "line": 1,
+      "kind": "invalid_domain",
+      "token": "-bad.com"
+    },
+    {
+      "line": 2,
+      "kind": "invalid_domain",
+      "token": "bad_com"
+    },
+    {
+      "line": 3,
+      "kind": "invalid_domain",
+      "token": "1.2.3.4"
+    },
+    {
+      "line": 4,
+      "kind": "invalid_domain",
+      "token": "bad@com"
+    },
+    {
+      "line": 5,
+      "kind": "invalid_domain",
+      "token": "trailing.com."
+    }
+  ],
+  "duplicates": []
+}

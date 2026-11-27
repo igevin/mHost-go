@@ -1,0 +1,16 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": "127.0.0.1",
+      "domains": [
+        "no-newline.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    }
+  ],
+  "errors": [],
+  "duplicates": []
+}

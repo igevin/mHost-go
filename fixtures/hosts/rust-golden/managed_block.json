@@ -1,0 +1,42 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": null,
+      "domains": [],
+      "comment": "# ---- mHost start ----",
+      "comment_only": true,
+      "enabled": false
+    },
+    {
+      "line": 2,
+      "ip": "127.0.0.1",
+      "domains": [
+        "managed.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 3,
+      "ip": null,
+      "domains": [],
+      "comment": "# ---- mHost end ----",
+      "comment_only": true,
+      "enabled": false
+    },
+    {
+      "line": 4,
+      "ip": "127.0.0.1",
+      "domains": [
+        "outside.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    }
+  ],
+  "errors": [],
+  "duplicates": []
+}

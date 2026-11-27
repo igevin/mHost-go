@@ -1,0 +1,4 @@
+127.0.0.1 dup.com
+127.0.0.1 dup.com
+10.0.0.1 keep.com a.com b.com
+10.0.0.1 keep.com

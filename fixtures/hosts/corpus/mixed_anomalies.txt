@@ -1,0 +1,5 @@
+127.0.0.1 ok.com
+bad_line
+127.0.0.1 ok2.com
+999.999.999.999 bad.com
+127.0.0.1 -bad.com

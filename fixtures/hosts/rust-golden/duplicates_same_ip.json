@@ -1,0 +1,65 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": "127.0.0.1",
+      "domains": [
+        "dup.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 2,
+      "ip": "127.0.0.1",
+      "domains": [
+        "dup.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 3,
+      "ip": "10.0.0.1",
+      "domains": [
+        "keep.com",
+        "a.com",
+        "b.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 4,
+      "ip": "10.0.0.1",
+      "domains": [
+        "keep.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    }
+  ],
+  "errors": [],
+  "duplicates": [
+    {
+      "domain": "dup.com",
+      "lines": [
+        1,
+        2
+      ],
+      "kind": "same_ip"
+    },
+    {
+      "domain": "keep.com",
+      "lines": [
+        3,
+        4
+      ],
+      "kind": "same_ip"
+    }
+  ]
+}

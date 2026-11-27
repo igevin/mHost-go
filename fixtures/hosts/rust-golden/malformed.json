@@ -1,0 +1,21 @@
+{
+  "rules": [],
+  "errors": [
+    {
+      "line": 1,
+      "kind": "malformed_line",
+      "token": "example.com 127.0.0.1"
+    },
+    {
+      "line": 2,
+      "kind": "malformed_line",
+      "token": "justonetoken"
+    },
+    {
+      "line": 3,
+      "kind": "malformed_line",
+      "token": "127.0.0.1"
+    }
+  ],
+  "duplicates": []
+}

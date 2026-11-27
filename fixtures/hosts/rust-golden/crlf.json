@@ -1,0 +1,30 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": "127.0.0.1",
+      "domains": [
+        "crlf.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 2,
+      "ip": null,
+      "domains": [],
+      "comment": "# comment line",
+      "comment_only": true,
+      "enabled": false
+    }
+  ],
+  "errors": [
+    {
+      "line": 3,
+      "kind": "invalid_ip",
+      "token": "999.1.1.1"
+    }
+  ],
+  "duplicates": []
+}
