@@ -231,3 +231,47 @@ func TestRecordBackupFailsForMissingSource(t *testing.T) {
 		t.Fatal("expected error for missing backup source")
 	}
 }
+
+func TestScanReportsOrphanSnapshotFiles(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, DirSnapshots)
+	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	index := `{"version":2,"snapshots":[{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"kept","profile_count":1,"created_at":"2026-11-01T00:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(snapshotDir, "index.json"), []byte(index), 0o600); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+	kept := `{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"kept","profile_count":1,"created_at":"2026-11-01T00:00:00Z","profiles":[]}`
+	if err := os.WriteFile(filepath.Join(snapshotDir, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.json"), []byte(kept), 0o600); err != nil {
+		t.Fatalf("write kept: %v", err)
+	}
+	orphan := `{"id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","name":"orphan","profile_count":0,"created_at":"2026-11-01T00:00:00Z","profiles":[]}`
+	if err := os.WriteFile(filepath.Join(snapshotDir, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.json"), []byte(orphan), 0o600); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+	manifest := `{"version":2,"app_version":"0.4.2","updated_at":"2026-11-01T00:00:00Z","dns_enabled":false,"original_dns":{"kind":"dhcp_empty"}}`
+	if err := os.WriteFile(filepath.Join(root, FileManifest), []byte(manifest), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	result, err := newTestStore().Scan(root)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(result.Snapshots) != 1 {
+		t.Fatalf("snapshots = %d, want 1 (orphan not registered)", len(result.Snapshots))
+	}
+	var orphanIssues []ScanIssue
+	for _, issue := range result.Issues {
+		if issue.Code == "orphan_snapshot" {
+			orphanIssues = append(orphanIssues, issue)
+		}
+	}
+	if len(orphanIssues) != 1 {
+		t.Fatalf("orphan issues = %v, all issues = %v", orphanIssues, result.Issues)
+	}
+	if orphanIssues[0].Severity != "warning" || !orphanIssues[0].Recoverable {
+		t.Fatalf("issue = %+v", orphanIssues[0])
+	}
+}

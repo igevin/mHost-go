@@ -29,6 +29,14 @@ func (m *HostsWorkbenchModel) View(c *ui.Context) {
 				}
 			})
 		}
+		if m.Info != "" {
+			ui.Row(c).Gap(10).Padding(8, 20).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
+				ui.Text(c, m.Info).FontSize(12)
+				if ui.Button(c, "Dismiss").Clicked() {
+					m.Info = ""
+				}
+			})
+		}
 
 		if len(m.Profiles) == 0 {
 			m.hostsEmptyView(c)
@@ -219,6 +227,12 @@ func (m *HostsWorkbenchModel) profileHeader(c *ui.Context) {
 			if ui.Button(c, "Delete").Disabled(m.busy() || profile.Protected).Clicked() {
 				m.RequestDelete(profile.ID)
 			}
+			if ui.Button(c, "Export…").Disabled(m.busy() || m.Picker == nil).Clicked() {
+				m.ExportSelected()
+			}
+		}
+		if m.Admin != nil && ui.Button(c, "Import…").Disabled(m.busy() || m.Picker == nil).Clicked() {
+			m.ImportFromDirectory()
 		}
 		ui.Spacer(c)
 		ui.Text(c, m.appliedStatusText()).FontSize(12).TextColor(theme.TextMuted)

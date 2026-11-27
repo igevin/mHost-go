@@ -2,7 +2,12 @@ package desktop
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	app "github.com/igevin/mHost-go/internal/app"
 	"github.com/igevin/mHost-go/internal/app/hostssvc"
@@ -208,4 +213,128 @@ func uniqueProfileName(base string, existing []string) string {
 			return candidate
 		}
 	}
+}
+
+// ExportSelected 把当前 profile 导出到用户选择的目录（.hosts 文本）。
+func (m *HostsWorkbenchModel) ExportSelected() {
+	if m.busy() || m.Admin == nil || m.Picker == nil || m.SelectedID == "" {
+		return
+	}
+	id, ctx := m.beginOperation()
+	m.Problem = nil
+	profileID := m.SelectedID
+	m.runAsync(func() {
+		dir, err := m.Picker.PickDirectory(ctx, app.DirectoryOptions{
+			Title:       "Export Profile",
+			ButtonLabel: "Export Here",
+			Message:     "Choose the directory for the .hosts file",
+		})
+		if err != nil {
+			if errors.Is(err, app.ErrPickerCancelled) {
+				m.dispatch(func() {
+					if m.current(id) {
+						m.Phase = HostsPhaseIdle
+						m.finishOperation()
+					}
+				})
+				return
+			}
+			m.dispatchError(id, "export_profile", err)
+			return
+		}
+		path, err := m.Admin.ExportProfile(ctx, profileID, dir)
+		if err != nil {
+			m.dispatchError(id, "export_profile", err)
+			return
+		}
+		m.dispatch(func() {
+			if !m.current(id) {
+				return
+			}
+			m.Info = "Exported to " + path
+			m.Phase = HostsPhaseIdle
+			m.finishOperation()
+		})
+	})
+}
+
+// ImportFromDirectory 让用户选目录，导入其中全部 .hosts 文件。
+func (m *HostsWorkbenchModel) ImportFromDirectory() {
+	if m.busy() || m.Admin == nil || m.Picker == nil {
+		return
+	}
+	id, ctx := m.beginOperation()
+	m.Problem = nil
+	m.runAsync(func() {
+		dir, err := m.Picker.PickDirectory(ctx, app.DirectoryOptions{
+			Title:       "Import Profiles",
+			ButtonLabel: "Import from Here",
+			Message:     "Choose the directory that contains .hosts files",
+		})
+		if err != nil {
+			if errors.Is(err, app.ErrPickerCancelled) {
+				m.dispatch(func() {
+					if m.current(id) {
+						m.Phase = HostsPhaseIdle
+						m.finishOperation()
+					}
+				})
+				return
+			}
+			m.dispatchError(id, "import_profiles", err)
+			return
+		}
+		files, err := hostsFilesInDir(dir)
+		if err != nil {
+			m.dispatchError(id, "import_profiles", err)
+			return
+		}
+		if len(files) == 0 {
+			m.dispatch(func() {
+				if m.current(id) {
+					m.Info = "No .hosts files found in " + dir
+					m.Phase = HostsPhaseIdle
+					m.finishOperation()
+				}
+			})
+			return
+		}
+		imported := 0
+		var lastErr error
+		for _, path := range files {
+			if _, err := m.Admin.ImportProfileFile(ctx, path); err != nil {
+				lastErr = err
+				continue
+			}
+			imported++
+		}
+		m.dispatch(func() {
+			if !m.current(id) {
+				return
+			}
+			if lastErr != nil && imported == 0 {
+				m.setError("import_profiles", lastErr)
+				return
+			}
+			m.Info = fmt.Sprintf("Imported %d profile(s) from %s", imported, dir)
+			m.refreshProfiles(id, ctx)
+		})
+	})
+}
+
+// hostsFilesInDir 列出目录下全部 .hosts 文件（排序，绝对路径）。
+func hostsFilesInDir(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".hosts") {
+			continue
+		}
+		out = append(out, filepath.Join(dir, entry.Name()))
+	}
+	sort.Strings(out)
+	return out, nil
 }

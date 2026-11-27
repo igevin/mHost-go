@@ -228,6 +228,33 @@ func (s *Store) scanSnapshots(root string, result *ScanResult) {
 		}
 		result.Snapshots = append(result.Snapshots, SnapshotEntry{RelPath: rel, Meta: meta})
 	}
+	s.scanOrphanSnapshots(root, &index, result)
+}
+
+// scanOrphanSnapshots 报告「存在但未被 index 引用」的快照文件
+// （#23）：登记失败的写出残留不会被静默丢弃，用户在 Issues 页可见，
+// 可自行删除文件后由扫描确认消失。
+func (s *Store) scanOrphanSnapshots(root string, index *SnapshotIndex, result *ScanResult) {
+	referenced := map[string]bool{}
+	for _, meta := range index.Snapshots {
+		referenced[meta.ID+".json"] = true
+	}
+	names, err := s.vol.ReadDir(filepath.Join(root, DirSnapshots))
+	if err != nil {
+		result.Issues = append(result.Issues, scanIssue(CodeReadFailed, DirSnapshots, err))
+		return
+	}
+	for _, name := range names {
+		if !strings.HasSuffix(name, ".json") || name == "index.json" || referenced[name] {
+			continue
+		}
+		rel := filepath.Join(DirSnapshots, name)
+		result.Issues = append(result.Issues, ScanIssue{
+			Code: "orphan_snapshot", Severity: app.SeverityWarning, Path: rel,
+			Message:     fmt.Sprintf("snapshot file %s is not referenced by the index (a registration failed); delete the file to clean up", name),
+			Recoverable: true,
+		})
+	}
 }
 
 func (s *Store) scanAdBlock(root string, result *ScanResult) {

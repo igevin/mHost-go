@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 const (
@@ -24,6 +25,9 @@ const (
 // 测试用 FaultyVolume 注入故障。
 type Volume interface {
 	ReadFile(path string) ([]byte, error)
+	// ReadDir 返回目录下全部文件名（不含子目录，按名称排序）；
+	// 目录不存在返回空列表。
+	ReadDir(path string) ([]string, error)
 	MkdirAll(path string, perm fs.FileMode) error
 	// WriteAtomic 以「临时文件 + fsync + rename」原子写入 path；
 	// 失败时不得改变目标文件的原有内容，不得留下临时文件。
@@ -41,6 +45,24 @@ func NewOSVolume() *OSVolume { return &OSVolume{} }
 
 func (OSVolume) ReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+func (OSVolume) ReadDir(path string) ([]string, error) {
+	entries, err := os.ReadDir(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func (OSVolume) MkdirAll(path string, perm fs.FileMode) error {
@@ -135,6 +157,10 @@ func NewFaultyVolume(base Volume, faults Faults) *FaultyVolume {
 
 func (v *FaultyVolume) ReadFile(path string) ([]byte, error) {
 	return v.base.ReadFile(path)
+}
+
+func (v *FaultyVolume) ReadDir(path string) ([]string, error) {
+	return v.base.ReadDir(path)
 }
 
 func (v *FaultyVolume) MkdirAll(path string, perm fs.FileMode) error {

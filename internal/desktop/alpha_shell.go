@@ -1,19 +1,24 @@
 package desktop
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 	app "github.com/igevin/mHost-go/internal/app"
 	"github.com/igevin/mHost-go/internal/app/alphaboot"
+	"github.com/igevin/mHost-go/internal/hostsfile"
+	"github.com/igevin/mHost-go/internal/storage"
 )
 
 // Alpha 导航页：Hosts 为主链路；其余页面 #26 实现，本阶段标记未开放。
 var alphaNavTabs = []string{"Hosts", "Snapshots", "System Hosts", "Settings"}
 
-// AlphaModel 是 Hosts-only Alpha 的应用壳（#25）：导航 + Hosts 主链路
-// + 启动信息（迁移回执/issue）展示。生命周期语义委托给内部
-// HostsWorkbenchModel（退出门禁、写不可取消等沿用 #13 安全语义）。
+// AlphaModel 是 Hosts-only Alpha 的应用壳（#25/#26）：导航 +
+// Hosts 主链路 + 快照/系统 Hosts/设置页 + 启动信息展示。
+// 生命周期语义委托给内部 HostsWorkbenchModel（退出门禁、
+// 写不可取消等沿用 #13 安全语义）。
 type AlphaModel struct {
 	Hosts *HostsWorkbenchModel
 
@@ -21,6 +26,20 @@ type AlphaModel struct {
 	Boot        *alphaboot.Result
 	bannerShown bool
 	started     bool
+
+	// 快照页（懒加载）
+	snapshotsLoaded bool
+	snapshots       []storage.SnapshotEntry
+	snapshotIssues  []app.StorageIssue
+
+	// 系统 Hosts 页（懒加载）
+	systemHostsLoaded bool
+	systemHosts       string
+	systemHostsErr    error
+
+	// 设置页
+	backupCountLoaded bool
+	backupCount       int
 }
 
 func NewAlphaModel(boot *alphaboot.Result) *AlphaModel {
@@ -62,8 +81,12 @@ func (m *AlphaModel) View(c *ui.Context) {
 		switch m.SelectedNav {
 		case 0:
 			m.Hosts.View(c)
+		case 1:
+			m.snapshotsView(c)
+		case 2:
+			m.systemHostsView(c)
 		default:
-			m.comingSoonView(c, alphaNavTabs[m.SelectedNav])
+			m.settingsView(c)
 		}
 	})
 }
@@ -109,13 +132,128 @@ func receiptSummaryLine(receipt app.WriteReceipt) string {
 	return fmt.Sprintf("Migration receipt · %d written · %d skipped · %d failed", written, skipped, failed)
 }
 
-// comingSoonView 标记未开放页面（#26 实现；DNS/AdBlock 不在 Alpha 范围）。
+// comingSoonView 保留给真正未开放的入口（DNS/AdBlock 在 Alpha 全程隐藏）。
 func (m *AlphaModel) comingSoonView(c *ui.Context, name string) {
 	theme := c.Theme()
 	ui.Column(c).Fill().Center().Gap(8).Padding(32).Children(func() {
 		ui.Text(c, name).FontSize(22).Bold()
 		ui.Text(c, "This page ships in a later Alpha slice.").TextColor(theme.TextMuted)
 		ui.Text(c, "DNS and AdBlock stay hidden in the Hosts-only Alpha.").FontSize(12).TextColor(theme.TextMuted)
+	})
+}
+
+// LoadSnapshots 扫描数据目录的快照（含孤儿快照 issue，#23）。
+func (m *AlphaModel) LoadSnapshots() {
+	if m.snapshotsLoaded || m.Boot == nil {
+		return
+	}
+	result, err := storage.NewStore(storage.NewOSVolume()).Scan(m.Boot.DataDir)
+	if err != nil {
+		m.snapshotIssues = []app.StorageIssue{{Code: "scan_failed", Severity: app.SeverityError, Message: err.Error(), Recoverable: true}}
+		m.snapshotsLoaded = true
+		return
+	}
+	m.snapshots = result.Snapshots
+	m.snapshotIssues = result.Issues
+	m.snapshotsLoaded = true
+}
+
+func (m *AlphaModel) snapshotsView(c *ui.Context) {
+	theme := c.Theme()
+	m.LoadSnapshots()
+	ui.Column(c).Fill().Gap(12).Padding(16, 20).Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Snapshots").FontSize(20).Bold().Grow(1)
+			if ui.Button(c, "Refresh").Clicked() {
+				m.snapshotsLoaded = false
+				m.LoadSnapshots()
+			}
+		})
+		if len(m.snapshots) == 0 {
+			ui.Text(c, "No snapshots yet.").TextColor(theme.TextMuted)
+		}
+		for _, snapshot := range m.snapshots {
+			ui.Text(c, fmt.Sprintf("%s · %d profiles · %s",
+				snapshot.Meta.Name, snapshot.Meta.ProfileCount,
+				snapshot.Meta.CreatedAt.Format("2006-01-02 15:04"))).SingleLine()
+		}
+		for _, issue := range m.snapshotIssues {
+			ui.Text(c, fmt.Sprintf("%s: %s (%s)", issue.Code, issue.Message, issue.Path)).
+				FontSize(12).TextColor(theme.TextMuted)
+		}
+		ui.Text(c, "Snapshot create/restore ships in a later slice; backups of every Apply are on the Hosts page receipt.").FontSize(11).TextColor(theme.TextMuted)
+	})
+}
+
+// LoadSystemHosts 读系统 hosts（只读视图）。
+func (m *AlphaModel) LoadSystemHosts(ctx context.Context) {
+	if m.systemHostsLoaded || m.Hosts.Admin == nil {
+		return
+	}
+	content, err := m.Hosts.Admin.SystemHostsContent(ctx)
+	m.systemHosts, m.systemHostsErr, m.systemHostsLoaded = content, err, true
+}
+
+func (m *AlphaModel) systemHostsView(c *ui.Context) {
+	theme := c.Theme()
+	m.LoadSystemHosts(context.Background())
+	ui.Column(c).Fill().Gap(12).Padding(16, 20).Children(func() {
+		ui.Text(c, "System Hosts · read only").FontSize(20).Bold()
+		if m.systemHostsErr != nil {
+			ui.Text(c, "Cannot read the system hosts file: "+m.systemHostsErr.Error()).TextColor(theme.TextMuted)
+			return
+		}
+		if !m.systemHostsLoaded {
+			ui.Text(c, "Loading…").TextColor(theme.TextMuted)
+			return
+		}
+		if managedStart := managedBlockBounds(m.systemHosts); managedStart >= 0 {
+			ui.Text(c, fmt.Sprintf("mHost managed block at line %d", managedStart+1)).FontSize(12).TextColor(theme.TextMuted)
+		} else {
+			ui.Text(c, "No mHost managed block yet.").FontSize(12).TextColor(theme.TextMuted)
+		}
+		ui.Scroll(c).Fill().Children(func() {
+			for _, line := range strings.Split(m.systemHosts, "\n") {
+				ui.Text(c, line).FontSize(12)
+			}
+		})
+	})
+}
+
+// managedBlockBounds 返回管理块起始行号（0-based），无块返回 -1。
+func managedBlockBounds(content string) int {
+	for i, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == hostsfile.ManagedStart {
+			return i
+		}
+	}
+	return -1
+}
+
+// LoadBackupCount 设置页展示 apply 备份数量。
+func (m *AlphaModel) LoadBackupCount(ctx context.Context) {
+	if m.backupCountLoaded || m.Hosts.Service == nil {
+		return
+	}
+	backups, err := m.Hosts.Service.ListApplyBackups(ctx)
+	if err == nil {
+		m.backupCount = len(backups)
+	}
+	m.backupCountLoaded = true
+}
+
+func (m *AlphaModel) settingsView(c *ui.Context) {
+	theme := c.Theme()
+	m.LoadBackupCount(context.Background())
+	ui.Column(c).Gap(12).Padding(16, 20).Children(func() {
+		ui.Text(c, "Settings").FontSize(20).Bold()
+		if m.Boot != nil {
+			ui.Text(c, "Data directory: "+m.Boot.DataDir)
+			ui.Text(c, "System hosts: "+m.Boot.HostsPath)
+		}
+		ui.Text(c, fmt.Sprintf("Apply backups: %d", m.backupCount)).SingleLine()
+		ui.Text(c, "Import/Export: use the Import… / Export… buttons on the Hosts page.").FontSize(12).TextColor(theme.TextMuted)
+		ui.Text(c, "DNS and AdBlock are not part of the Hosts-only Alpha.").FontSize(12).TextColor(theme.TextMuted)
 	})
 }
 

@@ -255,3 +255,107 @@ func newRealSvcOnly(t *testing.T) *hostssvc.Service {
 	svc, _ := newRealHostsService(t)
 	return svc
 }
+
+func TestAlphaSnapshotsPageLoads(t *testing.T) {
+	svc, root := newRealHostsService(t, "127.0.0.1 a.com\n")
+	// alphaboot 在真实启动时会写 v2 manifest；测试补齐该前提
+	manifest := `{"version":2,"app_version":"0.3.0-alpha","updated_at":"2026-11-01T00:00:00Z","dns_enabled":false,"original_dns":{"kind":"dhcp_empty"}}`
+	if err := os.WriteFile(filepath.Join(root, "manifest.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	// 写一个快照索引 + 一个孤儿快照文件
+	snapshotDir := filepath.Join(root, "snapshots")
+	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	index := `{"version":2,"snapshots":[{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"baseline","profile_count":1,"created_at":"2026-11-01T00:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(snapshotDir, "index.json"), []byte(index), 0o600); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+	kept := `{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"baseline","profile_count":1,"created_at":"2026-11-01T00:00:00Z","profiles":[]}`
+	if err := os.WriteFile(filepath.Join(snapshotDir, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.json"), []byte(kept), 0o600); err != nil {
+		t.Fatalf("write kept: %v", err)
+	}
+	orphan := `{"id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","name":"orphan","profile_count":0,"created_at":"2026-11-01T00:00:00Z","profiles":[]}`
+	if err := os.WriteFile(filepath.Join(snapshotDir, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.json"), []byte(orphan), 0o600); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+
+	model := NewAlphaModel(&alphaboot.Result{DataDir: root, Service: svc})
+	model.LoadSnapshots()
+	if len(model.snapshots) != 1 || model.snapshots[0].Meta.Name != "baseline" {
+		t.Fatalf("snapshots = %+v issues = %+v", model.snapshots, model.snapshotIssues)
+	}
+	foundOrphan := false
+	for _, issue := range model.snapshotIssues {
+		if issue.Code == "orphan_snapshot" {
+			foundOrphan = true
+		}
+	}
+	if !foundOrphan {
+		t.Fatalf("orphan issue missing: %+v", model.snapshotIssues)
+	}
+}
+
+func TestAlphaSystemHostsPageLoads(t *testing.T) {
+	svc, _ := newRealHostsService(t)
+	model := NewAlphaModel(&alphaboot.Result{Service: svc})
+	model.LoadSystemHosts(context.Background())
+	if model.systemHostsErr != nil {
+		t.Fatalf("err = %v", model.systemHostsErr)
+	}
+	if !strings.Contains(model.systemHosts, "127.0.0.1 keep.me") {
+		t.Fatalf("content = %q", model.systemHosts)
+	}
+	if got := managedBlockBounds("# ---- mHost start ----\nx\n"); got != 0 {
+		t.Fatalf("bounds = %d", got)
+	}
+	if got := managedBlockBounds("no block\n"); got != -1 {
+		t.Fatalf("bounds = %d", got)
+	}
+}
+
+type fakePicker struct {
+	dir string
+	err error
+}
+
+func (p fakePicker) PickDirectory(ctx context.Context, opts app.DirectoryOptions) (string, error) {
+	return p.dir, p.err
+}
+
+func TestWorkbenchExportAndImportRoundTrip(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 export.me\n")
+	exportDir := t.TempDir()
+	importDir := t.TempDir()
+	model := newAdminWorkbench(t, svc)
+	model.Load()
+	model.SelectProfile(model.Profiles[0].ID)
+	model.Picker = fakePicker{dir: exportDir}
+
+	model.ExportSelected()
+	if model.Problem != nil {
+		t.Fatalf("export problem = %+v", model.Problem)
+	}
+	if model.Info == "" || !strings.Contains(model.Info, exportDir) {
+		t.Fatalf("info = %q", model.Info)
+	}
+	entries, err := os.ReadDir(exportDir)
+	if err != nil || len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".hosts") {
+		t.Fatalf("exports = %v err=%v", entries, err)
+	}
+
+	// 把导出文件挪到导入目录，导入回来
+	exported, _ := os.ReadFile(filepath.Join(exportDir, entries[0].Name()))
+	if err := os.WriteFile(filepath.Join(importDir, entries[0].Name()), exported, 0o644); err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	model.Picker = fakePicker{dir: importDir}
+	model.ImportFromDirectory()
+	if model.Problem != nil {
+		t.Fatalf("import problem = %+v", model.Problem)
+	}
+	if len(model.Profiles) != 2 {
+		t.Fatalf("profiles = %+v", model.Profiles)
+	}
+}
