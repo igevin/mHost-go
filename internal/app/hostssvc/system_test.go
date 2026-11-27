@@ -82,3 +82,17 @@ func TestImportProfileFile(t *testing.T) {
 		t.Fatalf("profiles = %+v", profiles)
 	}
 }
+
+func TestExportProfileKeepsUnicodeName(t *testing.T) {
+	profile := testProfile("11111111-1111-4111-8111-111111111111", "默认", "127.0.0.1 a.com\n")
+	env := newTestEnv(t, "127.0.0.1 keep.me\n", profile)
+	dir := t.TempDir()
+
+	path, err := env.service.ExportProfile(context.Background(), profile.ID, dir)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if filepath.Base(path) != "默认.hosts" {
+		t.Fatalf("basename = %q, want 默认.hosts", filepath.Base(path))
+	}
+}

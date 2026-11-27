@@ -50,9 +50,12 @@ type AlphaModel struct {
 	backupCount        int
 }
 
-func NewAlphaModel(boot *alphaboot.Result) *AlphaModel {
+// NewAlphaModel 构造 Alpha 壳。picker 为目录选择器（导入导出用）；
+// 生产传 &NativeDirectoryPicker{}，nil 时导入导出入口禁用。
+func NewAlphaModel(boot *alphaboot.Result, picker app.DirectoryPicker) *AlphaModel {
 	hosts := NewHostsWorkbenchModel(boot.Service)
 	hosts.Admin = boot.Service
+	hosts.Picker = picker
 	hosts.Chromeless = true
 	return &AlphaModel{
 		Hosts:    hosts,
@@ -61,6 +64,9 @@ func NewAlphaModel(boot *alphaboot.Result) *AlphaModel {
 		Dispatch: func(fn func()) { fn() },
 	}
 }
+
+// DirectoryPicker 让 App 给原生选择器挂父窗口（与存储 Workbench 同机制）。
+func (m *AlphaModel) DirectoryPicker() app.DirectoryPicker { return m.Hosts.Picker }
 
 func (m *AlphaModel) Title() string { return "mHost Alpha" }
 

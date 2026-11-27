@@ -335,8 +335,12 @@ func (m *HostsWorkbenchModel) ImportFromDirectory() {
 				return
 			}
 			m.Info = fmt.Sprintf("Imported %d profile(s) from %s", imported, dir)
-			m.refreshProfiles(id, ctx)
+			if failed := len(files) - imported; failed > 0 {
+				m.Info += fmt.Sprintf(" · %d failed (invalid content or unreadable)", failed)
+			}
 		})
+		// 列表刷新留在 worker 侧（service I/O 不进 Dispatch）。
+		m.refreshProfiles(id, ctx)
 	})
 }
 

@@ -205,7 +205,7 @@ func TestAlphaModelStartLoadsProfiles(t *testing.T) {
 		HostsPath: "/tmp/hosts",
 		Service:   svc,
 	}
-	model := NewAlphaModel(boot)
+	model := NewAlphaModel(boot, nil)
 	model.Hosts.Async = func(fn func()) { fn() }
 	model.Hosts.Dispatch = func(fn func()) { fn() }
 
@@ -223,7 +223,7 @@ func TestAlphaModelStartLoadsProfiles(t *testing.T) {
 func TestAlphaModelNavComingSoon(t *testing.T) {
 	svc, _ := newRealHostsService(t)
 	boot := &alphaboot.Result{Service: svc}
-	model := NewAlphaModel(boot)
+	model := NewAlphaModel(boot, nil)
 	if model.Title() != "mHost Alpha" {
 		t.Fatalf("title = %q", model.Title())
 	}
@@ -243,7 +243,7 @@ func TestAlphaModelBootBannerData(t *testing.T) {
 			Code: "orphan_snapshot", Message: "snapshot file not in index",
 		}},
 	}
-	model := NewAlphaModel(boot)
+	model := NewAlphaModel(boot, nil)
 	if model.Boot.Issues[0].Code != "orphan_snapshot" {
 		t.Fatalf("issues = %+v", model.Boot.Issues)
 	}
@@ -282,7 +282,7 @@ func TestAlphaSnapshotsPageLoads(t *testing.T) {
 		t.Fatalf("write orphan: %v", err)
 	}
 
-	model := NewAlphaModel(&alphaboot.Result{DataDir: root, Service: svc})
+	model := NewAlphaModel(&alphaboot.Result{DataDir: root, Service: svc}, nil)
 	model.Async = func(fn func()) { fn() }
 	model.Dispatch = func(fn func()) { fn() }
 	model.LoadSnapshots()
@@ -302,7 +302,7 @@ func TestAlphaSnapshotsPageLoads(t *testing.T) {
 
 func TestAlphaSystemHostsPageLoads(t *testing.T) {
 	svc, _ := newRealHostsService(t)
-	model := NewAlphaModel(&alphaboot.Result{Service: svc})
+	model := NewAlphaModel(&alphaboot.Result{Service: svc}, nil)
 	model.Async = func(fn func()) { fn() }
 	model.Dispatch = func(fn func()) { fn() }
 	model.LoadSystemHosts(context.Background())
@@ -407,5 +407,17 @@ func TestToggleEnabledKeepsDraftRevisionSaveable(t *testing.T) {
 	}
 	if model.Modified() {
 		t.Fatal("draft still modified after save")
+	}
+}
+
+func TestAlphaModelWiresPickerAndExposesIt(t *testing.T) {
+	picker := fakePicker{dir: t.TempDir()}
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	model := NewAlphaModel(&alphaboot.Result{Service: svc}, picker)
+	if model.Hosts.Picker == nil {
+		t.Fatal("picker not wired into hosts workbench")
+	}
+	if model.DirectoryPicker() == nil {
+		t.Fatal("DirectoryPicker() not exposed for App parent wiring")
 	}
 }

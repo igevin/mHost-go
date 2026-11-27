@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	app "github.com/igevin/mHost-go/internal/app"
 )
@@ -48,17 +49,21 @@ func (s *Service) ExportProfile(ctx context.Context, profileID, dir string) (str
 	return path, nil
 }
 
+// sanitizeFileName 保留 Unicode 字母与数字（中文名不再整体变 _，
+// review 建议项），仅替换路径分隔符、控制字符与文件系统保留字符。
 func sanitizeFileName(name string) string {
 	var out strings.Builder
 	for _, r := range name {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+		case unicode.IsLetter(r) || unicode.IsNumber(r):
+			out.WriteRune(r)
+		case r == '-', r == '_', r == '.', r == ' ':
 			out.WriteRune(r)
 		default:
 			out.WriteByte('_')
 		}
 	}
-	return strings.Trim(out.String(), ".")
+	return strings.Trim(out.String(), ". ")
 }
 
 // ImportProfileFile 从 path 读取 hosts 文本并创建 profile。
