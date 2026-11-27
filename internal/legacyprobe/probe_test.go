@@ -165,6 +165,78 @@ func TestScan_DoesNotModifyInput(t *testing.T) {
 	}
 }
 
+func TestHashFile_ComputesSHA256(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		missing bool
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "empty file",
+			content: "",
+			want:    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		},
+		{
+			name:    "single line",
+			content: "hello\n",
+			want:    "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+		},
+		{
+			name:    "hosts rule with comment",
+			content: "127.0.0.1 api.test # local\n",
+			want:    "93048defeafbd6bf0f011070d65c36d95a8cfdad470e6db5672f68bc68e44e64",
+		},
+		{
+			name:    "missing file",
+			missing: true,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fixture")
+			if !tt.missing {
+				if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := hashFile(path)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("hashFile(%q) = %q, want error", path, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("hash = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// hashFile 计算单个文件的 sha256。
+// 文件句柄在本次调用返回前关闭 —— 不能把 defer 写在 WalkDir 回调里，
+// 否则句柄会一直堆积到外层函数返回，文件树大时会耗尽 fd。
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 func hashTree(t *testing.T, root string) map[string]string {
 	t.Helper()
 	files := make(map[string]string)
@@ -179,20 +251,15 @@ func hashTree(t *testing.T, root string) map[string]string {
 		if err != nil {
 			return err
 		}
-		f, err := os.Open(file)
+		sum, err := hashFile(file)
 		if err != nil {
-			return err
-		}
-		defer f.Close()
-		hash := sha256.New()
-		if _, err := io.Copy(hash, f); err != nil {
 			return err
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
-		files[rel] = hex.EncodeToString(hash.Sum(nil))
+		files[rel] = sum
 		return nil
 	})
 	if err != nil {
