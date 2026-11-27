@@ -382,6 +382,7 @@ func marshalModel(value any) ([]byte, error) {
 // ClassifyModelError 把模型解析错误归类为语法错误或校验错误。
 // json.Unmarshal 在调用自定义 UnmarshalJSON 之前会先做一次全文档
 // 合法性检查，因此语法错误可能以 *json.SyntaxError 形式到达这里。
+// 与模型无关的错误（如 OS 权限错误）返回空串，调用方保留原分类。
 func ClassifyModelError(err error) ModelErrKind {
 	if err == nil {
 		return ""
@@ -398,7 +399,7 @@ func ClassifyModelError(err error) ModelErrKind {
 	if errors.As(err, &typeErr) {
 		return ModelErrValidation
 	}
-	return ModelErrValidation
+	return ""
 }
 func validUUID(value string) bool {
 	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {

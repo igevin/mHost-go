@@ -3,6 +3,7 @@ package storage
 import (
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/igevin/mHost-go/internal/legacyprobe"
@@ -47,9 +48,18 @@ func TestProbeAndStorageAgree(t *testing.T) {
 				rules              int
 				enabled, protected bool
 			}
+			// v1 文件没有 mode 字段：正式实现按所在目录推断模式，而
+			// Phase 0 探针统一回退 hosts。这里以目录语义为准做比对。
+			expectedMode := func(relPath, probeMode string) string {
+				if strings.Contains(relPath, "profiles/dns") && probeMode == string(legacyprobe.ModeHosts) {
+					return string(legacyprobe.ModeDNS)
+				}
+				return probeMode
+			}
 			probeProfiles := map[profileKey]int{}
 			for _, profile := range probeReport.Profiles {
-				key := profileKey{profile.ID, profile.Name, string(profile.Mode), profile.RuleCount, profile.Enabled, profile.Protected}
+				mode := expectedMode(filepath.ToSlash(profile.Path), string(profile.Mode))
+				key := profileKey{profile.ID, profile.Name, mode, profile.RuleCount, profile.Enabled, profile.Protected}
 				probeProfiles[key]++
 			}
 			storageProfiles := map[profileKey]int{}

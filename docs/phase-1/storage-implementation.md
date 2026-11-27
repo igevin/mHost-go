@@ -43,7 +43,7 @@ backups/index.json         # 备份登记
 预览（`PreviewMigration`）列出逐类变更；应用（`ApplyMigration`）按 Plan ID + Base Revision 执行，副本变化后旧计划即过期（`ErrorStaleOperation`）。
 
 - **manifest**：升级到 version 2，物化 `dns_enabled=false` 与 `original_dns={kind: dhcp_empty}`（v1 没有 DNS 状态记录，这是「无信息」的保守默认，不是猜测）。`app_version` 保留，`updated_at` 刷新为迁移时间。
-- **Profile**：逐个 round-trip（解析后按 v2 字段默认值重新序列化，如缺省的 `mode: "hosts"`），内容语义不变。损坏的 Profile 是**阻塞项**，禁止迁移（语义不明确的数据不能静默跳过）。
+- **Profile**：逐个 round-trip（解析后按 v2 字段默认值重新序列化）。v1 文件没有 `mode` 字段时按所在目录推断（`profiles/dns/` 下物化为 `dns`，其余为 `hosts`），保证迁移后磁盘语义与目录一致；内容语义不变。损坏的 Profile 是**阻塞项**，禁止迁移（语义不明确的数据不能静默跳过）。
 - **可选组件**（快照、广告配置）：不是迁移对象，原样保留；已损坏时在计划与回执中逐项列出并标记 `skipped` + warning issue。
 - 每个被覆盖的文件：先登记备份 → 原子替换 → 读回字节比对。任一步失败，该文件保持原样，回执逐项列出成功/失败，不显示全局成功。
 

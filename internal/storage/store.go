@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -143,6 +144,31 @@ func (s *Store) readManifest(root string) (*Manifest, error) {
 	return &manifest, nil
 }
 
+// parseProfile 解析单个 profile 文件；v1 文件没有 mode 字段时按所在
+// 目录推断模式（profiles/dns/ 下即 dns），避免迁移 round-trip 把
+// DNS profile 误写成 hosts。
+func parseProfile(data []byte, directoryMode ProfileMode) (Profile, error) {
+	var profile Profile
+	if err := unmarshalModel(data, &profile); err != nil {
+		return profile, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err == nil {
+		if _, ok := fields["mode"]; !ok {
+			profile.Mode = directoryMode
+		}
+	}
+	return profile, nil
+}
+
+// directoryModeForProfile 从相对路径推断目录对应的模式。
+func directoryModeForProfile(rel string) ProfileMode {
+	if strings.HasPrefix(rel, filepath.Join(DirProfiles, string(ModeDNS))) {
+		return ModeDNS
+	}
+	return ModeHosts
+}
+
 func (s *Store) scanProfiles(root string, mode ProfileMode, result *ScanResult) {
 	dir := filepath.Join(DirProfiles, string(mode))
 	entries, err := os.ReadDir(filepath.Join(root, dir))
@@ -162,8 +188,8 @@ func (s *Store) scanProfiles(root string, mode ProfileMode, result *ScanResult) 
 			result.Issues = append(result.Issues, scanIssue(CodeReadFailed, rel, err))
 			continue
 		}
-		var profile Profile
-		if err := unmarshalModel(data, &profile); err != nil {
+		profile, err := parseProfile(data, mode)
+		if err != nil {
 			result.Issues = append(result.Issues, modelScanIssue(rel, err))
 			continue
 		}

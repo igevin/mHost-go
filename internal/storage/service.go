@@ -464,8 +464,16 @@ func (s *Service) RestoreBackup(ctx context.Context, workspaceID, backupID strin
 	result.Backup = &safety
 	result.Preservation = app.PreserveRestored
 	receipt := s.commit(entry, operationID, entry.workspace.Revision, []app.WriteResult{result})
-	if result.Status != app.WriteWritten || !result.ReadbackVerified {
-		return receipt, resultIssueError("restore", result)
+	// 内容与备份相同（WriteUnchanged）视为恢复成功：文件本就处于
+	// 备份所记录的状态。
+	if result.Status != app.WriteWritten && result.Status != app.WriteUnchanged {
+		if uiErr := resultIssueError("restore", result); uiErr != nil {
+			return receipt, uiErr
+		}
+		return receipt, &app.UIError{Kind: app.ErrorWrite, Operation: "restore", Path: target.Path, Message: "Restore did not complete", Retryable: true}
+	}
+	if !result.ReadbackVerified {
+		return receipt, &app.UIError{Kind: app.ErrorReadback, Operation: "restore", Path: target.Path, Message: "Restore verification failed", Retryable: true}
 	}
 	return receipt, nil
 }
@@ -522,13 +530,14 @@ func (s *Service) writeContent(root, rel, entity, operationID string, data []byt
 }
 
 // roundTripProfile 解析后重新序列化，物化 v2 字段默认值。
+// mode 缺失时按所在目录推断，保持目录语义一致。
 func (s *Service) roundTripProfile(root, rel, operationID string) app.WriteResult {
 	data, err := s.store.vol.ReadFile(filepath.Join(root, rel))
 	if err != nil {
 		return failedResult("profile", rel, err)
 	}
-	var profile Profile
-	if err := unmarshalModel(data, &profile); err != nil {
+	profile, err := parseProfile(data, directoryModeForProfile(rel))
+	if err != nil {
 		return failedResult("profile", rel, err)
 	}
 	return s.writeEntity(root, rel, "profile", operationID, profile)
@@ -665,10 +674,14 @@ func (s *Service) mapScanError(operation, root string, err error) error {
 	if strings.Contains(err.Error(), "not a directory") || strings.Contains(err.Error(), "not an mHost storage") {
 		kind = app.ErrorInvalidPath
 	}
-	if ClassifyModelError(err) == ModelErrSyntax {
+	// 只有确属模型解析失败时才改判；OS 错误（权限等）保持原分类。
+	switch ClassifyModelError(err) {
+	case ModelErrSyntax:
 		kind = app.ErrorInvalidJSON
-	} else if ClassifyModelError(err) == ModelErrValidation && kind == app.ErrorPermission {
-		kind = app.ErrorValidation
+	case ModelErrValidation:
+		if kind == app.ErrorPermission {
+			kind = app.ErrorValidation
+		}
 	}
 	return &app.UIError{Kind: kind, Operation: operation, Path: root, Message: err.Error(), Detail: err.Error(), Cause: err}
 }
@@ -795,9 +808,10 @@ func firstFailureOr(current *app.UIError, result app.WriteResult) *app.UIError {
 
 func resultIssueError(operation string, result app.WriteResult) error {
 	uiErr := firstFailureOr(nil, result)
-	if uiErr != nil {
-		uiErr.Operation = operation
+	if uiErr == nil {
+		return nil
 	}
+	uiErr.Operation = operation
 	return uiErr
 }
 
