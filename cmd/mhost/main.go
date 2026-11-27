@@ -42,7 +42,7 @@ func main() {
 			model = desktop.NewStartupErrorModel(err)
 			break
 		}
-		model = desktop.NewAlphaModel(boot)
+		model = desktop.NewAlphaModel(boot, &desktop.NativeDirectoryPicker{})
 	}
 
 	if err := desktop.NewApp(model).Run(); err != nil {

@@ -158,17 +158,36 @@ func (m *WorkbenchModel) overviewView(c *ui.Context) {
 			ui.Text(c, receiptSummary(*m.Receipt)).Bold()
 			results := m.Receipt.Results
 			ui.Table(c, &m.receiptRows, []ui.TableColumn{
-				{Title: "Entity", Width: 100}, {Title: "Path", Width: 260}, {Title: "Status", Width: 90},
-				{Title: "Readback", Width: 80}, {Title: "Backup"},
+				{Title: "Entity", Width: 100}, {Title: "Path", Width: 220}, {Title: "Status", Width: 90},
+				{Title: "Readback", Width: 80}, {Title: "Issue"},
 			}, len(results), func(row, col int) {
 				result := results[row]
 				backupID := ""
 				if result.Backup != nil {
 					backupID = result.Backup.ID
 				}
-				values := []string{result.Entity, result.Path, string(result.Status), fmt.Sprint(result.ReadbackVerified), backupID}
+				issueText := ""
+				if result.Issue != nil {
+					issueText = result.Issue.Message
+				}
+				values := []string{result.Entity, result.Path, string(result.Status), fmt.Sprint(result.ReadbackVerified), issueText}
+				if col == 4 && backupID != "" && issueText == "" {
+					values[4] = "backup " + backupID
+				}
 				ui.Text(c, values[col]).SingleLine()
 			}).Grow(1).FillWidth()
+			// 带 issue 的行逐条列出（含 Detail），回答"为什么 skipped/failed"
+			// （#23：informational issue 不再只显示一个无解释的 skipped）。
+			for _, result := range results {
+				if result.Issue == nil {
+					continue
+				}
+				detail := result.Issue.Message
+				if result.Issue.Detail != "" && result.Issue.Detail != result.Issue.Message {
+					detail += " · " + result.Issue.Detail
+				}
+				ui.Text(c, fmt.Sprintf("%s %s: %s", result.Entity, result.Path, detail)).FontSize(11).TextColor(theme.TextMuted)
+			}
 		}
 	})
 }

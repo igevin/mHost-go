@@ -53,6 +53,8 @@ type HostsWorkbenchModel struct {
 	Chromeless    bool // Alpha 壳嵌入时隐藏自身标题栏（壳已有导航头）
 	Admin         ProfileAdmin
 	SearchQuery   string
+	Picker        app.DirectoryPicker
+	Info          string // 一次性操作提示（导出/导入结果）
 	OnSafeToQuit  func()
 
 	// ProblemsSplit is the editor's share (percent) of the vertical split

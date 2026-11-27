@@ -26,6 +26,12 @@ type ProfileAdmin interface {
 	SetProfileEnabled(ctx context.Context, profileID string, enabled bool) (app.HostsProfileDetail, error)
 	// DeleteProfile 删除 profile（受保护 profile 拒绝）。
 	DeleteProfile(ctx context.Context, profileID string) error
+	// ExportProfile 把 profile 内容导出为 <名称>.hosts 到 dir，返回路径。
+	ExportProfile(ctx context.Context, profileID, dir string) (string, error)
+	// ImportProfileFile 从 .hosts 文件创建 profile。
+	ImportProfileFile(ctx context.Context, path string) (app.HostsProfileDetail, error)
+	// SystemHostsContent 返回系统 hosts 当前内容（只读视图）。
+	SystemHostsContent(ctx context.Context) (string, error)
 }
 
 // CreateProfile 新建 profile。名称去空白后不得为空；内容必须是

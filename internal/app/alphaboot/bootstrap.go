@@ -5,8 +5,10 @@ package alphaboot
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 
 	app "github.com/igevin/mHost-go/internal/app"
 	"github.com/igevin/mHost-go/internal/app/hostssvc"
@@ -96,7 +98,24 @@ func Prepare(ctx context.Context, opts Options) (*Result, error) {
 					}
 				}
 			}
-		} else if !os.IsNotExist(err) {
+		} else if os.IsNotExist(err) {
+			// 全新安装：写出最小 v2 manifest，让存储扫描/快照页可用
+			manifest := storage.Manifest{
+				Version:     2,
+				AppVersion:  "0.3.0-alpha",
+				UpdatedAt:   time.Now().UTC(),
+				DNSEnabled:  boolPtr(false),
+				OriginalDNS: &storage.OriginalDNS{Kind: storage.OriginalDNSDHCPEmpty},
+			}
+			data, err := json.MarshalIndent(manifest, "", "  ")
+			if err != nil {
+				return nil, err
+			}
+			volume := storage.NewOSVolume()
+			if err := volume.WriteAtomic(filepath.Join(dataDir, storage.FileManifest), data, storage.FilePerm); err != nil {
+				return nil, &app.UIError{Kind: app.ErrorWrite, Message: "Cannot initialize the data directory", Path: dataDir, Cause: err}
+			}
+		} else {
 			return nil, &app.UIError{Kind: app.ErrorPermission, Message: "Cannot read the data directory", Path: dataDir, Cause: err}
 		}
 	}
@@ -125,3 +144,5 @@ func Prepare(ctx context.Context, opts Options) (*Result, error) {
 		Issues:    issues,
 	}, nil
 }
+
+func boolPtr(v bool) *bool { return &v }
