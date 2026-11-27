@@ -283,6 +283,8 @@ func TestAlphaSnapshotsPageLoads(t *testing.T) {
 	}
 
 	model := NewAlphaModel(&alphaboot.Result{DataDir: root, Service: svc})
+	model.Async = func(fn func()) { fn() }
+	model.Dispatch = func(fn func()) { fn() }
 	model.LoadSnapshots()
 	if len(model.snapshots) != 1 || model.snapshots[0].Meta.Name != "baseline" {
 		t.Fatalf("snapshots = %+v issues = %+v", model.snapshots, model.snapshotIssues)
@@ -301,6 +303,8 @@ func TestAlphaSnapshotsPageLoads(t *testing.T) {
 func TestAlphaSystemHostsPageLoads(t *testing.T) {
 	svc, _ := newRealHostsService(t)
 	model := NewAlphaModel(&alphaboot.Result{Service: svc})
+	model.Async = func(fn func()) { fn() }
+	model.Dispatch = func(fn func()) { fn() }
 	model.LoadSystemHosts(context.Background())
 	if model.systemHostsErr != nil {
 		t.Fatalf("err = %v", model.systemHostsErr)

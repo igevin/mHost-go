@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/egoist/mygo/ui"
 	app "github.com/igevin/mHost-go/internal/app"
@@ -22,24 +23,31 @@ var alphaNavTabs = []string{"Hosts", "Snapshots", "System Hosts", "Settings"}
 type AlphaModel struct {
 	Hosts *HostsWorkbenchModel
 
+	Async    func(func()) // worker 侧执行（默认 goroutine）
+	Dispatch func(func()) // 主线程合并（App 注入 window.Update）
+
 	SelectedNav int
 	Boot        *alphaboot.Result
 	bannerShown bool
 	started     bool
+	closed      atomic.Bool
 
-	// 快照页（懒加载）
-	snapshotsLoaded bool
-	snapshots       []storage.SnapshotEntry
-	snapshotIssues  []app.StorageIssue
+	// 快照页（懒加载，磁盘扫描在 worker 侧执行）
+	snapshotsLoaded  bool
+	snapshotsLoading bool
+	snapshots        []storage.SnapshotEntry
+	snapshotIssues   []app.StorageIssue
 
 	// 系统 Hosts 页（懒加载）
-	systemHostsLoaded bool
-	systemHosts       string
-	systemHostsErr    error
+	systemHostsLoaded  bool
+	systemHostsLoading bool
+	systemHosts        string
+	systemHostsErr     error
 
 	// 设置页
-	backupCountLoaded bool
-	backupCount       int
+	backupCountLoaded  bool
+	backupCountLoading bool
+	backupCount        int
 }
 
 func NewAlphaModel(boot *alphaboot.Result) *AlphaModel {
@@ -47,8 +55,10 @@ func NewAlphaModel(boot *alphaboot.Result) *AlphaModel {
 	hosts.Admin = boot.Service
 	hosts.Chromeless = true
 	return &AlphaModel{
-		Hosts: hosts,
-		Boot:  boot,
+		Hosts:    hosts,
+		Boot:     boot,
+		Async:    func(fn func()) { go fn() },
+		Dispatch: func(fn func()) { fn() },
 	}
 }
 
@@ -143,19 +153,29 @@ func (m *AlphaModel) comingSoonView(c *ui.Context, name string) {
 }
 
 // LoadSnapshots 扫描数据目录的快照（含孤儿快照 issue，#23）。
+// 磁盘扫描在 worker 侧执行（快照页 I/O 不进渲染线程），结果合并回主线程。
 func (m *AlphaModel) LoadSnapshots() {
-	if m.snapshotsLoaded || m.Boot == nil {
+	if m.snapshotsLoaded || m.snapshotsLoading || m.Boot == nil {
 		return
 	}
-	result, err := storage.NewStore(storage.NewOSVolume()).Scan(m.Boot.DataDir)
-	if err != nil {
-		m.snapshotIssues = []app.StorageIssue{{Code: "scan_failed", Severity: app.SeverityError, Message: err.Error(), Recoverable: true}}
-		m.snapshotsLoaded = true
-		return
-	}
-	m.snapshots = result.Snapshots
-	m.snapshotIssues = result.Issues
-	m.snapshotsLoaded = true
+	m.snapshotsLoading = true
+	m.Async(func() {
+		result, err := storage.NewStore(storage.NewOSVolume()).Scan(m.Boot.DataDir)
+		m.Dispatch(func() {
+			if m.closed.Load() {
+				return
+			}
+			m.snapshotsLoading = false
+			m.snapshotsLoaded = true
+			if err != nil {
+				m.snapshots = nil
+				m.snapshotIssues = []app.StorageIssue{{Code: "scan_failed", Severity: app.SeverityError, Message: err.Error(), Recoverable: true}}
+				return
+			}
+			m.snapshots = result.Snapshots
+			m.snapshotIssues = result.Issues
+		})
+	})
 }
 
 func (m *AlphaModel) snapshotsView(c *ui.Context) {
@@ -185,13 +205,22 @@ func (m *AlphaModel) snapshotsView(c *ui.Context) {
 	})
 }
 
-// LoadSystemHosts 读系统 hosts（只读视图）。
+// LoadSystemHosts 读系统 hosts（只读视图）。读文件在 worker 侧执行。
 func (m *AlphaModel) LoadSystemHosts(ctx context.Context) {
-	if m.systemHostsLoaded || m.Hosts.Admin == nil {
+	if m.systemHostsLoaded || m.systemHostsLoading || m.Hosts.Admin == nil {
 		return
 	}
-	content, err := m.Hosts.Admin.SystemHostsContent(ctx)
-	m.systemHosts, m.systemHostsErr, m.systemHostsLoaded = content, err, true
+	m.systemHostsLoading = true
+	m.Async(func() {
+		content, err := m.Hosts.Admin.SystemHostsContent(ctx)
+		m.Dispatch(func() {
+			if m.closed.Load() {
+				return
+			}
+			m.systemHostsLoading = false
+			m.systemHosts, m.systemHostsErr, m.systemHostsLoaded = content, err, true
+		})
+	})
 }
 
 func (m *AlphaModel) systemHostsView(c *ui.Context) {
@@ -230,16 +259,25 @@ func managedBlockBounds(content string) int {
 	return -1
 }
 
-// LoadBackupCount 设置页展示 apply 备份数量。
+// LoadBackupCount 设置页展示 apply 备份数量。读盘在 worker 侧执行。
 func (m *AlphaModel) LoadBackupCount(ctx context.Context) {
-	if m.backupCountLoaded || m.Hosts.Service == nil {
+	if m.backupCountLoaded || m.backupCountLoading || m.Hosts.Service == nil {
 		return
 	}
-	backups, err := m.Hosts.Service.ListApplyBackups(ctx)
-	if err == nil {
-		m.backupCount = len(backups)
-	}
-	m.backupCountLoaded = true
+	m.backupCountLoading = true
+	m.Async(func() {
+		backups, err := m.Hosts.Service.ListApplyBackups(ctx)
+		m.Dispatch(func() {
+			if m.closed.Load() {
+				return
+			}
+			m.backupCountLoading = false
+			m.backupCountLoaded = true
+			if err == nil {
+				m.backupCount = len(backups)
+			}
+		})
+	})
 }
 
 func (m *AlphaModel) settingsView(c *ui.Context) {
@@ -260,8 +298,12 @@ func (m *AlphaModel) settingsView(c *ui.Context) {
 // 生命周期与 App 接线：全部委托给 Hosts 主链路。
 func (m *AlphaModel) RequestQuit() bool { return m.Hosts.RequestQuit() }
 func (m *AlphaModel) CancelQuit()       { m.Hosts.CancelQuit() }
-func (m *AlphaModel) Close() error      { return m.Hosts.Close() }
+func (m *AlphaModel) Close() error {
+	m.closed.Store(true)
+	return m.Hosts.Close()
+}
 func (m *AlphaModel) SetDispatch(fn func(func())) {
+	m.Dispatch = fn
 	m.Hosts.SetDispatch(fn)
 }
 func (m *AlphaModel) SetOnSafeToQuit(fn func()) { m.Hosts.SetOnSafeToQuit(fn) }
