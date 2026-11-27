@@ -80,7 +80,7 @@ make debug-mhost   # 仅 macOS
 
 ## 本地编译 mac 版
 
-目标产物：`build/darwin-arm64/mHost Phase 0.app`（以及 macOS 上的 `.dmg`）。仅支持 `darwin/arm64`，ad-hoc 自签名，不走 Apple 开发者账号。
+目标产物：`build/darwin-arm64/mHost Phase 1.app`（以及 macOS 上的 `.dmg`）。仅支持 `darwin/arm64`，ad-hoc 自签名，不走 Apple 开发者账号。
 
 ### 在 Linux 上交叉编译（产出 .app）
 
@@ -107,7 +107,7 @@ macOS 首次运行时需在「系统设置 → 隐私与安全性」放行自签
 
 ### 从 CI 获取正式产物
 
-master 或 PR 的 macOS CI（`.github/workflows/phase-0.yml`）会自动产出并上传 artifact，包含 `.app`、`.dmg`、`build-metadata.txt`、`SHA256SUMS`，可作为本地构建的对照基线。
+master 或 PR 的 macOS CI（`.github/workflows/phase-1.yml`）会自动产出并上传 artifact，包含 `.app`、`.dmg`、`build-metadata.txt`、`SHA256SUMS`，可作为本地构建的对照基线。
 
 ## PR 会自动跑什么
 
@@ -116,7 +116,7 @@ master 或 PR 的 macOS CI（`.github/workflows/phase-0.yml`）会自动产出�
 | 工作流 | 跑在哪 | 内容 |
 | --- | --- | --- |
 | `CI`（`ci.yml`） | ubuntu | `gofmt` 格式门禁、`go vet`、单元测试 + 覆盖率、`go test -race` 竞态检测、`go build`、darwin/arm64 交叉编译 + vet |
-| `Phase 0 validation`（`phase-0.yml`） | macOS | 打包 `.app` / DMG、签名、包内校验 |
+| `Phase 1 validation`（`phase-1.yml`） | macOS | 打包 `.app` / DMG、签名、包内校验 |
 | `AI Code Review`（`ai-review.yml`） | ubuntu | 以 `gevinyu` 身份在 PR 上发一条 AI 审查意见 |
 
 ### AI 审查的性质

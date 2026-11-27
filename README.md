@@ -4,7 +4,7 @@
 
 本项目计划使用 Go 和 [MyGo](https://github.com/egoist/mygo) 构建原生桌面应用。在延续源项目核心功能、数据兼容要求和安全边界的同时，重新设计视觉、信息架构与交互，不复刻旧版中不合理的 UI 和操作逻辑。
 
-> **当前状态：Phase 0 技术验证。** 仓库尚不提供可用的产品功能或正式安装包。当前交付物是技术原型、行为基线、构建流程和验证报告，而非完整重写版本。
+> **当前状态：Phase 1 UI 与存储兼容。** 当前应用是可运行的 Storage Workbench：MyGo 界面、交互和状态机由内存演示服务驱动，不读写真实存储。#14 将接入正式存储实现。仓库仍不提供完整产品功能或正式安装包。
 
 ## 项目方向
 
@@ -20,20 +20,19 @@
 
 - [#1：Go 重写总体规划](https://github.com/igevin/mHost-go/issues/1)
 - [#2：Phase 0 技术验证与行为基线](https://github.com/igevin/mHost-go/issues/2)
-- [Phase 0 执行终稿](https://github.com/igevin/mHost-go/issues/2#issuecomment-7157833490)
+- [#3：Phase 1 Go 工程骨架与现有存储兼容](https://github.com/igevin/mHost-go/issues/3)
+- [#13：Storage Workbench UI 与内存演示服务](https://github.com/igevin/mHost-go/issues/13)
+- [#14：正式存储实现与集成](https://github.com/igevin/mHost-go/issues/14)
+- [Storage Workbench UI 与服务契约](docs/phase-1/storage-ui-design.md)
 
-## 当前阶段：Phase 0
+## 当前阶段：Phase 1
 
-Phase 0 是后续投入的 go/no-go 验收门，主要工作包括：
+Phase 1 分为两个连续交付：
 
-1. 建立源项目功能地图，收集虚构、脱敏或程序生成的代表性测试语料。
-2. 实现 Go 只读存储探针，验证样本解析、关键默认值和损坏输入处理。
-3. 建立 MyGo 单窗口技术原型，验证编辑器、弹窗、托盘及退出生命周期。
-4. 建立最小 DNS proxy 生命周期原型，验证正常退出、异常退出和下次启动恢复。
-5. 建立 GitHub Actions macOS 构建，生成可供 M 系列 Mac 验证的 arm64 应用和 DMG。
-6. 汇总验证结果、风险、workaround 和明确的继续、调整或停止结论。
+1. #13 实现 MyGo Storage Workbench、目录选择、只读/工作副本模式、迁移与写入预览、回执、备份恢复、退出控制和 UI 测试。此阶段使用内存 Demo Service，不读写磁盘。
+2. #14 按同一服务契约实现正式领域模型、v1→v2 迁移、原子写入、备份、损坏恢复和真实 fixture 集成测试，并替换 Demo Service。
 
-本阶段使用内存假数据构建 UI 原型，不实现正式存储层和完整产品工作流，也不进行正式性能对照。编辑器仅以 10 万行 Hosts 样本进行无阻断冒烟验证。
+Phase 0 已完成技术验证和行为基线，报告见 [Phase 0 报告](docs/phase-0/report.md)。当前主入口不再启动 DNS 原型，也不修改系统 DNS。
 
 ## 技术基线
 
@@ -55,7 +54,7 @@ go test ./...
 go vet ./...
 ```
 
-在 macOS 上运行原生 UI 原型：
+在 macOS 上运行 Storage Workbench（内存演示服务）：
 
 ```sh
 go tool mygo dev
@@ -82,18 +81,20 @@ go run ./cmd/storage-probe -root fixtures/storage/mixed-invalid
 
 ## 运行测试构建
 
-Phase 0 构建产物仅用于专用 M 系列 Mac 测试环境。从 GitHub Actions 下载 `mhost-phase-0-darwin-arm64` artifact 后，需要在“隐私与安全性”中显式允许打开，或仅对测试包移除 quarantine 属性：
+Phase 1 构建产物仅用于专用 M 系列 Mac 测试环境。从 GitHub Actions 下载 `mhost-phase-1-darwin-arm64` artifact 后，需要在“隐私与安全性”中显式允许打开，或仅对测试包移除 quarantine 属性：
 
 ```sh
-xattr -dr com.apple.quarantine "/path/to/mHost Phase 0.app"
+xattr -dr com.apple.quarantine "/path/to/mHost Phase 1.app"
 ```
 
 ad-hoc 签名不代表通过 Apple 公证，Gatekeeper 提示属于预期行为，不以 `spctl` 通过作为验收条件。
 
-完整编辑、退出和 DNS 恢复步骤见 [Phase 0 真机验证手册](docs/phase-0/manual-validation.md)。启动 UI 不会主动修改 DNS；只有在 DNS Lab 中显式点击 Start DNS Test 才会请求授权。验证结果记录在 [Phase 0 报告](docs/phase-0/report.md)。
+当前 Workbench 由内存演示服务驱动，可以选择合成数据路径并验证完整 UI 流程，但不会实际读取、迁移或写入这些目录。正式存储接入后的真机步骤见 [Storage Workbench 验证计划](docs/phase-1/storage-ui-validation.md)。Phase 0 的历史验证记录仍保留在 [Phase 0 报告](docs/phase-0/report.md)。
 
 ## 安全边界
 
+- 当前 Phase 1 Demo Service 只保存内存状态，不读取或写入用户选择的目录；真实存储安全语义由 #14 实现并通过隔离 fixture 验证。
+- Phase 1 主入口不启动 DNS server/proxy，不请求 DNS 提权，不修改系统 DNS。
 - Phase 0 不写真实用户目录，不执行正式数据迁移，不修改生产 `/etc/hosts`。
 - DNS 原型仅在专用 macOS 测试环境修改系统 DNS；GitHub Actions 不执行真实提权或系统 DNS 修改。
 - 修改 DNS 前必须持久化原始状态和恢复标记，恢复并验证成功后才能删除标记。
