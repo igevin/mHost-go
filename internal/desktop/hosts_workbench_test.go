@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -303,6 +304,84 @@ func TestHostsWorkbenchQuitGatedDuringApply(t *testing.T) {
 	quitReq := func() bool { ch := make(chan bool, 1); run(func() { ch <- model.QuitRequested }); return <-ch }()
 	if quitReq || !quitted {
 		t.Fatalf("deferred quit did not continue after the safe boundary: %v/%v", quitReq, quitted)
+	}
+}
+
+func TestHostsWorkbenchSidebarRendersSelectedProfileOnce(t *testing.T) {
+	model := newTestHostsWorkbench(demo.NewHostsService())
+	loadAndSelect(t, model, "conflict")
+	tester := ui.NewTester(model.View, 1120, 760)
+	tester.Frame()
+	occurrences := 0
+	for _, text := range tester.Texts() {
+		if text == "冲突样本" {
+			occurrences++
+		}
+	}
+	// One sidebar button + one header name; the sidebar must not double-render
+	// the selected profile.
+	if occurrences != 2 {
+		t.Fatalf("selected profile rendered %d times, want 2: %q", occurrences, tester.Texts())
+	}
+}
+
+func TestHostsWorkbenchProblemsPanelWithManyDiagnostics(t *testing.T) {
+	model := newTestHostsWorkbench(demo.NewHostsService())
+	loadAndSelect(t, model, "dev")
+	var lines strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&lines, "10.0.0.%d crowd.demo.test\n", i)
+	}
+	model.Editor.Select(0, 0)
+	model.Editor.Insert(lines.String())
+	model.SyncFromEditor()
+	tester := ui.NewTester(model.View, 1120, 760)
+	tester.Frame()
+	// The editor status row and the problems header must both stay visible
+	// regardless of how many diagnostics exist.
+	if !tester.HasText("Cmd-F find · edits invalidate a staged preview") {
+		t.Fatalf("editor status row squeezed out: %q", tester.Texts())
+	}
+	if !tester.HasText("Problems (30)") {
+		t.Fatalf("problems panel missing: %q", tester.Texts())
+	}
+}
+
+func TestHostsWorkbenchProblemsSplitGivesEditorTheMajorShare(t *testing.T) {
+	model := newTestHostsWorkbench(demo.NewHostsService())
+	loadAndSelect(t, model, "dev")
+	var lines strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&lines, "10.0.0.%d crowd.demo.test\n", i)
+	}
+	model.Editor.Select(0, 0)
+	model.Editor.Insert(lines.String())
+	model.SyncFromEditor()
+	tester := ui.NewTester(model.View, 1120, 760)
+	tester.Frame()
+	statusRect, ok := tester.Find("Cmd-F find · edits invalidate a staged preview")
+	if !ok {
+		t.Fatalf("editor status row missing: %q", tester.Texts())
+	}
+	problemsRect, ok := tester.Find("Problems (30)")
+	if !ok {
+		t.Fatalf("problems panel missing: %q", tester.Texts())
+	}
+	t.Logf("status y=%v problems y=%v", statusRect.Y, problemsRect.Y)
+	// SplitVerticalPercent takes the first pane's share of the room in
+	// percent (0-100), so ProblemsSplit=70 puts the editor on top with 70%
+	// and the problems panel in the bottom 30%. Lock that geometry: the
+	// problems title sits in the bottom third of the window, and the editor
+	// status row at the bottom of the top pane stays well above it. If the
+	// percentage were read as the second pane's share, or the range were
+	// 0-1, the divider would land near the top and the problems title would
+	// move up into the top half.
+	if problemsRect.Y < 760*0.6 {
+		t.Fatalf("problems panel top y=%v, want bottom third (split share semantics changed?)", problemsRect.Y)
+	}
+	if statusRect.Y+statusRect.H >= problemsRect.Y {
+		t.Fatalf("editor status row (y=%v..%v) should end above the problems panel (y=%v)",
+			statusRect.Y, statusRect.Y+statusRect.H, problemsRect.Y)
 	}
 }
 

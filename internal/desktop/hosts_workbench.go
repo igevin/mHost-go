@@ -51,6 +51,11 @@ type HostsWorkbenchModel struct {
 	DemoMode      bool
 	OnSafeToQuit  func()
 
+	// ProblemsSplit is the editor's share (percent) of the vertical split
+	// between the editor and the problems panel; the user drags the divider
+	// to resize, and the value persists across frames and profile switches.
+	ProblemsSplit float32
+
 	drafts            map[string]*hostsDraft
 	operation         uint64
 	cancel            context.CancelFunc
@@ -73,8 +78,9 @@ func NewHostsWorkbenchModel(service app.HostsService) *HostsWorkbenchModel {
 			KeepScrollbars: true,
 			LineNumbers:    editor.LineNumbersOn,
 		},
-		drafts:      map[string]*hostsDraft{},
-		Resolutions: map[string]string{},
+		drafts:        map[string]*hostsDraft{},
+		Resolutions:   map[string]string{},
+		ProblemsSplit: 70,
 	}
 }
 

@@ -55,12 +55,18 @@ func (m *HostsWorkbenchModel) View(c *ui.Context) {
 				} else {
 					m.profileHeader(c)
 					m.toolbar(c)
-					if m.Staged != nil {
-						m.stagedPreview(c)
+					if len(m.Editor.Diagnostics()) == 0 {
+						m.editorOrPreview(c)
 					} else {
-						m.editorSurface(c)
+						// The problems panel scrolls inside its split section and
+						// never stretches with the diagnostic count; the divider
+						// is draggable to resize manually.
+						ui.SplitVerticalPercent(c, &m.ProblemsSplit, func() {
+							m.editorOrPreview(c)
+						}, func() {
+							m.problemsPanel(c)
+						}).Grow(1).FillWidth()
 					}
-					m.problemsPanel(c)
 					m.receiptArea(c)
 				}
 			})
@@ -104,11 +110,13 @@ func (m *HostsWorkbenchModel) profileSidebar(c *ui.Context) {
 			if profile.Protected {
 				label += "  🔒"
 			}
-			button := ui.Button(c, label)
+			clicked := false
 			if profile.ID == m.SelectedID {
-				button = ui.PrimaryButton(c, label)
+				clicked = ui.PrimaryButton(c, label).Disabled(m.busy()).Clicked()
+			} else {
+				clicked = ui.Button(c, label).Disabled(m.busy()).Clicked()
 			}
-			if button.Disabled(m.busy()).Clicked() {
+			if clicked {
 				m.SelectProfile(profile.ID)
 			}
 		}
@@ -191,6 +199,14 @@ func (m *HostsWorkbenchModel) toolbar(c *ui.Context) {
 	})
 }
 
+func (m *HostsWorkbenchModel) editorOrPreview(c *ui.Context) {
+	if m.Staged != nil {
+		m.stagedPreview(c)
+	} else {
+		m.editorSurface(c)
+	}
+}
+
 func (m *HostsWorkbenchModel) editorSurface(c *ui.Context) {
 	theme := c.Theme()
 	editor.View(c, m.Editor).Grow(1).FillWidth()
@@ -254,18 +270,17 @@ func (m *HostsWorkbenchModel) conflictRow(c *ui.Context, conflict app.Conflict) 
 
 func (m *HostsWorkbenchModel) problemsPanel(c *ui.Context) {
 	diagnostics := m.Editor.Diagnostics()
-	if len(diagnostics) == 0 {
-		return
-	}
-	ui.Column(c).Gap(4).Padding(8).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Children(func() {
+	ui.Column(c).Fill().Gap(4).Padding(8).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Children(func() {
 		ui.Text(c, fmt.Sprintf("Problems (%d)", len(diagnostics))).FontSize(12).Bold()
-		for _, diagnostic := range diagnostics {
-			pos := m.Editor.Buffer.Pos(diagnostic.Start)
-			label := fmt.Sprintf("Line %d: %s", pos.Line+1, diagnostic.Message)
-			if ui.Button(c, label).Clicked() {
-				m.Editor.GoTo(editor.Pos{Line: pos.Line})
+		ui.Scroll(c).Fill().Children(func() {
+			for _, diagnostic := range diagnostics {
+				pos := m.Editor.Buffer.Pos(diagnostic.Start)
+				label := fmt.Sprintf("Line %d: %s", pos.Line+1, diagnostic.Message)
+				if ui.Button(c, label).Clicked() {
+					m.Editor.GoTo(editor.Pos{Line: pos.Line})
+				}
 			}
-		}
+		})
 	})
 }
 
