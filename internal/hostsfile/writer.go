@@ -16,6 +16,15 @@ import (
 // MaxBackups 是保留的 apply 备份上限（源项目 writer/backup.rs MAX_BACKUPS）。
 const MaxBackups = 10
 
+// 分类哨兵错误：服务层用 errors.Is 区分失败阶段，不依赖错误文案
+// 子串匹配（review 建议项）。
+var (
+	// ErrBackup 写前备份失败（尚未触碰系统 hosts）。
+	ErrBackup = errors.New("backup failed")
+	// ErrReadback 写入后的读回验证失败（已按备份自动回滚）。
+	ErrReadback = errors.New("readback verification failed")
+)
+
 // Volume 是写入器需要的文件系统操作子集；internal/storage 的
 // OSVolume / FaultyVolume 均满足该接口，测试可直接注入故障。
 type Volume interface {
@@ -136,7 +145,7 @@ func (w *SystemWriter) Apply(rules []ResolvedRule, backupRequired bool, meta Bac
 	if backupRequired {
 		backup, err = w.createBackup(current, meta)
 		if err != nil {
-			return nil, current, fmt.Errorf("create backup: %w", err)
+			return nil, current, fmt.Errorf("%w: %v", ErrBackup, err)
 		}
 	}
 
@@ -152,24 +161,24 @@ func (w *SystemWriter) Apply(rules []ResolvedRule, backupRequired bool, meta Bac
 	// 失败时自动从备份回滚并再次读回比对。
 	written, err := w.volume.ReadFile(w.hostsPath)
 	if err != nil {
-		return backup, current, fmt.Errorf("readback written hosts: %w", err)
+		return backup, current, fmt.Errorf("%w: read: %v", ErrReadback, err)
 	}
 	if err := Verify(string(written), rules); err != nil {
-		verifyErr := fmt.Errorf("verify written hosts: %w", err)
+		verifyErr := fmt.Errorf("%w: %v", ErrReadback, err)
 		if backup != nil {
 			if rbErr := w.restoreBackupFile(backup); rbErr != nil {
-				return backup, current, fmt.Errorf("%v; rollback also failed: %w", verifyErr, rbErr)
+				return backup, current, fmt.Errorf("%w; rollback also failed: %v", verifyErr, rbErr)
 			}
 			restored, rerr := w.volume.ReadFile(w.hostsPath)
 			if rerr != nil {
-				return backup, current, fmt.Errorf("%v; rollback readback failed: %w", verifyErr, rerr)
+				return backup, current, fmt.Errorf("%w; rollback readback failed: %v", verifyErr, rerr)
 			}
 			want, rerr := w.readBackupContent(backup)
 			if rerr != nil {
-				return backup, current, fmt.Errorf("%v; rollback backup unreadable: %w", verifyErr, rerr)
+				return backup, current, fmt.Errorf("%w; rollback backup unreadable: %v", verifyErr, rerr)
 			}
 			if string(restored) != string(want) {
-				return backup, current, fmt.Errorf("%v; rollback content mismatch", verifyErr)
+				return backup, current, fmt.Errorf("%w; rollback content mismatch", verifyErr)
 			}
 		}
 		return backup, current, verifyErr

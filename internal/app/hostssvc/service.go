@@ -34,7 +34,10 @@ type Service struct {
 
 	mu    sync.Mutex
 	plans map[string]*applyPlan
-	seq   uint64
+	// issues 记录扫描期发现的可恢复问题（损坏文件被跳过等），
+	// 随 loadAllProfiles 刷新，经 StorageIssues() 供 UI 展示。
+	issues []app.StorageIssue
+	seq    uint64
 
 	applyMu sync.Mutex // Apply Lock：串行化 Apply/Rollback 的系统写入
 }
@@ -92,6 +95,24 @@ func (g *operationIDGen) new() string {
 // profilesDir 是 hosts profile 的 v2 存储目录。
 func (s *Service) profilesDir() string {
 	return filepath.Join(s.root, storage.DirProfiles, string(storage.ModeHosts))
+}
+
+// StorageIssues 返回扫描/管理过程中积累的 informational issue
+// （如损坏的 profile 文件被跳过）。UI 周期性地随列表加载刷新。
+func (s *Service) StorageIssues() []app.StorageIssue {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]app.StorageIssue(nil), s.issues...)
+}
+
+// recordIssue 记录一条 issue（去重按 Code+Path）。
+func (s *Service) recordIssue(issue app.StorageIssue) {
+	for _, existing := range s.issues {
+		if existing.Code == issue.Code && existing.Path == issue.Path {
+			return
+		}
+	}
+	s.issues = append(s.issues, issue)
 }
 
 // ListProfiles 返回工作区内全部 hosts profile（按名称排序）。
@@ -166,11 +187,23 @@ func (s *Service) loadAllProfiles() ([]storage.Profile, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	s.issues = nil
+	s.mu.Unlock()
 	var profiles []storage.Profile
 	for _, path := range entries {
 		profile, err := s.readProfileFile(path)
 		if err != nil {
-			// 单个损坏文件不应拖垮列表：跳过并继续（问题在存储层可见）
+			// 单个损坏文件不拖垮列表，但记录 issue 让用户可见
+			//（review 建议项：不再静默跳过）。
+			rel, _ := filepath.Rel(s.root, path)
+			s.mu.Lock()
+			s.recordIssue(app.StorageIssue{
+				Code: "profile_unreadable", Severity: app.SeverityError, Path: rel,
+				Message: fmt.Sprintf("Profile file %s is unreadable or invalid and was skipped", filepath.Base(path)),
+				Detail:  err.Error(), Recoverable: true,
+			})
+			s.mu.Unlock()
 			continue
 		}
 		if profile.Mode == storage.ModeHosts {
@@ -241,8 +274,9 @@ func countEnabledRules(profile storage.Profile) int {
 }
 
 // profileContent 把存储规则渲染为 hosts 文本：
-// 启用规则正常渲染，禁用规则渲染为注释行（文本模型里"禁用=注释"，
-// 与解析侧 `# ip domain` → 注释占位规则 互为往返）。
+// 启用规则正常渲染；禁用规则（含带 IP 的）渲染为注释行——
+// 文本模型里"禁用=注释"，保证 加载→预览→应用→保存 全程不丢禁用语义
+// （review 必须修复项：带 IP 的禁用规则曾被渲染成有效行而静默启用）。
 func profileContent(profile storage.Profile) string {
 	var rules []hostsfile.Rule
 	for _, rule := range profile.Rules {
@@ -258,11 +292,22 @@ func profileContent(profile storage.Profile) string {
 			rules = append(rules, hostsfile.Rule{Enabled: false, Comment: &comment, CommentOnly: true})
 			continue
 		}
+		if !rule.Enabled {
+			text := "# " + rule.IP.String()
+			if len(rule.Domains) > 0 {
+				text += " " + strings.Join(rule.Domains, " ")
+			}
+			if rule.Comment != nil && *rule.Comment != "" {
+				text += " # " + *rule.Comment
+			}
+			rules = append(rules, hostsfile.Rule{Enabled: false, Comment: &text, CommentOnly: true})
+			continue
+		}
 		ip := *rule.IP
 		rules = append(rules, hostsfile.Rule{
 			IP:      &ip,
 			Domains: append([]string(nil), rule.Domains...),
-			Enabled: rule.Enabled,
+			Enabled: true,
 			Comment: rule.Comment,
 		})
 	}
