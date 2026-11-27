@@ -209,8 +209,8 @@ func TestApplyVerifyFailureAutoRollsBack(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected verification failure")
 	}
-	if !strings.Contains(err.Error(), "verify") {
-		t.Fatalf("error should mention verify: %v", err)
+	if !errors.Is(err, ErrReadback) {
+		t.Fatalf("error should wrap ErrReadback: %v", err)
 	}
 	if backup == nil {
 		t.Fatal("backup record expected for rollback")

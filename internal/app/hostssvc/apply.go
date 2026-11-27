@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	app "github.com/igevin/mHost-go/internal/app"
@@ -55,6 +54,11 @@ func (s *Service) PreviewApply(ctx context.Context, profileID string, resolution
 	profile, err := s.loadProfile(profileID)
 	if err != nil {
 		return app.ApplyPlan{}, err
+	}
+	// 与源项目合并器语义一致：禁用的 profile 不进入系统 hosts。
+	// 存储态 Enable ≠ 已应用；停用后须先启用才能预览/应用。
+	if !profile.Enabled {
+		return app.ApplyPlan{}, &app.UIError{Kind: app.ErrorValidation, Message: fmt.Sprintf("Profile %q is disabled; enable it before applying", profile.Name)}
 	}
 
 	parsed, blockers := parseProfileContent(profile)
@@ -121,6 +125,9 @@ func (s *Service) Apply(ctx context.Context, planID string, resolutions map[stri
 	if len(plan.blockers) > 0 {
 		return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorValidation, Message: "Resolve parse errors before applying"}
 	}
+	if !profile.Enabled {
+		return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorValidation, Message: fmt.Sprintf("Profile %q is disabled; enable it before applying", profile.Name)}
+	}
 	if err := validateResolutions(plan.conflicts, resolutions); err != nil {
 		return app.ApplyReceipt{}, err
 	}
@@ -180,11 +187,12 @@ func (s *Service) Apply(ctx context.Context, planID string, resolutions map[stri
 	return receipt, nil
 }
 
-// applyFailureReceipt 把 writer 错误映射为回执 + UIError。
-// 写入失败：原块保留；验证失败：writer 已自动回滚。
+// applyFailureReceipt 把 writer 错误按哨兵类型分类为回执 + UIError。
+// 写入失败：原块保留；验证失败：writer 已自动回滚；备份失败：未触碰系统。
 func (s *Service) applyFailureReceipt(receipt app.ApplyReceipt, err error) (app.ApplyReceipt, error) {
 	message := err.Error()
-	if strings.Contains(message, "verify") || strings.Contains(message, "readback") {
+	switch {
+	case errors.Is(err, hostsfile.ErrReadback):
 		receipt.Results = append(receipt.Results,
 			app.ApplyResult{Entity: "managed_block", Status: app.WriteWritten},
 			app.ApplyResult{Entity: "verification", Status: app.WriteWritten, Issue: &app.StorageIssue{
@@ -193,15 +201,26 @@ func (s *Service) applyFailureReceipt(receipt app.ApplyReceipt, err error) (app.
 			}},
 		)
 		return receipt, &app.UIError{Kind: app.ErrorReadback, Message: "Readback verification failed after applying", Detail: message, Cause: err}
+	case errors.Is(err, hostsfile.ErrBackup):
+		receipt.Results = append(receipt.Results,
+			app.ApplyResult{Entity: "backup", Status: app.WriteFailed, Issue: &app.StorageIssue{
+				Code: "backup_failed", Severity: app.SeverityError,
+				Message: "Backup failed; the system hosts was not touched", Detail: message, Recoverable: true,
+			}},
+			app.ApplyResult{Entity: "managed_block", Status: app.WriteSkipped},
+			app.ApplyResult{Entity: "verification", Status: app.WriteSkipped},
+		)
+		return receipt, &app.UIError{Kind: app.ErrorBackup, Message: "Backup failed; nothing was written", Detail: message, Retryable: true, Cause: err}
+	default:
+		receipt.Results = append(receipt.Results,
+			app.ApplyResult{Entity: "managed_block", Status: app.WriteFailed, Issue: &app.StorageIssue{
+				Code: "write_failed", Severity: app.SeverityError,
+				Message: "Managed block write failed; the previous block is preserved", Detail: message, Recoverable: true,
+			}},
+			app.ApplyResult{Entity: "verification", Status: app.WriteSkipped},
+		)
+		return receipt, &app.UIError{Kind: app.ErrorWrite, Message: "Managed block write failed; the previous block is preserved", Detail: message, Retryable: true, Cause: err}
 	}
-	receipt.Results = append(receipt.Results,
-		app.ApplyResult{Entity: "managed_block", Status: app.WriteFailed, Issue: &app.StorageIssue{
-			Code: "write_failed", Severity: app.SeverityError,
-			Message: "Managed block write failed; the previous block is preserved", Detail: message, Recoverable: true,
-		}},
-		app.ApplyResult{Entity: "verification", Status: app.WriteSkipped},
-	)
-	return receipt, &app.UIError{Kind: app.ErrorWrite, Message: "Managed block write failed; the previous block is preserved", Detail: message, Retryable: true, Cause: err}
 }
 
 func (s *Service) dropPlan(planID string) {
