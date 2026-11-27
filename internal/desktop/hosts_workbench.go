@@ -231,20 +231,20 @@ func (m *HostsWorkbenchModel) Save() {
 	revision := draft.revision
 	m.runAsync(func() {
 		detail, err := m.Service.SaveProfile(ctx, profileID, content, revision)
+		if err != nil {
+			m.dispatchError(id, "save", err)
+			return
+		}
 		m.dispatch(func() {
 			if !m.current(id) {
-				return
-			}
-			if err != nil {
-				m.setError("save", err)
 				return
 			}
 			draft.savedContent = detail.Content
 			draft.revision = detail.Revision
 			m.Staged = nil
 			m.PlanStale = false
-			m.refreshProfiles(id, ctx)
 		})
+		m.refreshProfiles(id, ctx)
 	})
 }
 
@@ -272,7 +272,13 @@ func (m *HostsWorkbenchModel) PreviewApply() {
 			}
 			m.Staged = &plan
 			m.PlanStale = false
-			m.Resolutions = resolutions
+			// Keep choices made while this preview was in flight: only fill
+			// domains the user has not chosen since.
+			for domain, ip := range resolutions {
+				if _, chosen := m.Resolutions[domain]; !chosen {
+					m.Resolutions[domain] = ip
+				}
+			}
 			m.Phase = HostsPhaseIdle
 			m.finishOperation()
 		})
@@ -338,19 +344,25 @@ func (m *HostsWorkbenchModel) Apply() {
 	m.Problem = nil
 	m.runAsync(func() {
 		receipt, err := m.Service.Apply(ctx, planID, resolutions)
-		m.dispatch(func() {
-			if !m.current(id) {
-				return
-			}
-			if receipt.OperationID != "" || len(receipt.Results) != 0 {
-				m.Receipt = &receipt
-			}
-			if err != nil {
-				m.setError("apply", err)
-				return
-			}
-			m.refreshApplied(id, ctx)
-		})
+		if receipt.OperationID != "" || len(receipt.Results) != 0 {
+			m.dispatch(func() {
+				if m.current(id) {
+					m.Receipt = &receipt
+				}
+			})
+		}
+		if err != nil {
+			// Keep the conflict choices for the next preview; only the plan ID
+			// is consumed by a failed apply.
+			m.dispatch(func() {
+				if m.current(id) {
+					m.Resolutions = resolutions
+				}
+			})
+			m.dispatchError(id, "apply", err)
+			return
+		}
+		m.refreshApplied(id, ctx)
 	})
 }
 
@@ -363,22 +375,23 @@ func (m *HostsWorkbenchModel) Rollback(backupID string) {
 	m.Problem = nil
 	m.runAsync(func() {
 		receipt, err := m.Service.Rollback(ctx, backupID)
-		m.dispatch(func() {
-			if !m.current(id) {
-				return
-			}
-			if receipt.OperationID != "" || len(receipt.Results) != 0 {
-				m.Receipt = &receipt
-			}
-			if err != nil {
-				m.setError("rollback", err)
-				return
-			}
-			m.refreshApplied(id, ctx)
-		})
+		if receipt.OperationID != "" || len(receipt.Results) != 0 {
+			m.dispatch(func() {
+				if m.current(id) {
+					m.Receipt = &receipt
+				}
+			})
+		}
+		if err != nil {
+			m.dispatchError(id, "rollback", err)
+			return
+		}
+		m.refreshApplied(id, ctx)
 	})
 }
 
+// refreshProfiles and refreshApplied run service reads on the worker side and
+// merge results on the main thread; service I/O never runs inside Dispatch.
 func (m *HostsWorkbenchModel) refreshProfiles(id uint64, ctx context.Context) {
 	profiles, err := m.Service.ListProfiles(ctx)
 	m.dispatch(func() {
@@ -397,17 +410,21 @@ func (m *HostsWorkbenchModel) refreshProfiles(id uint64, ctx context.Context) {
 
 func (m *HostsWorkbenchModel) refreshApplied(id uint64, ctx context.Context) {
 	applied, err := m.Service.AppliedState(ctx)
+	if err != nil {
+		m.dispatch(func() {
+			if m.current(id) {
+				m.setError("refresh_applied", err)
+			}
+		})
+		return
+	}
 	m.dispatch(func() {
 		if !m.current(id) {
 			return
 		}
-		if err != nil {
-			m.setError("refresh_applied", err)
-			return
-		}
 		m.Applied = applied
-		m.refreshProfiles(id, ctx)
 	})
+	m.refreshProfiles(id, ctx)
 }
 
 func (m *HostsWorkbenchModel) RequestQuit() bool {

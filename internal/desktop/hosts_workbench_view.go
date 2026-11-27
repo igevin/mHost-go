@@ -245,7 +245,7 @@ func (m *HostsWorkbenchModel) conflictRow(c *ui.Context, conflict app.Conflict) 
 			if m.Resolutions[conflict.Domain] == ip {
 				label = "✓ " + label
 			}
-			if ui.Button(c, label).Clicked() {
+			if ui.Button(c, label).Disabled(m.busy()).Clicked() {
 				m.ChooseResolution(conflict.Domain, ip)
 			}
 		}
@@ -374,8 +374,10 @@ func applyReceiptSummary(receipt app.ApplyReceipt) string {
 		}
 	}
 	switch {
-	case failed > 0:
+	case failed > 0 && receipt.RollbackRef != nil:
 		return fmt.Sprintf("Apply incomplete · %d failed · backup %s available", failed, receipt.RollbackRef.ID)
+	case failed > 0:
+		return fmt.Sprintf("Apply incomplete · %d failed · no backup available", failed)
 	case verified > 0:
 		return fmt.Sprintf("Apply verified · %d checked", verified)
 	default:
