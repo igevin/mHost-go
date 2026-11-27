@@ -169,7 +169,7 @@ func (s *Service) SaveProfile(ctx context.Context, profileID string, content str
 		return app.HostsProfileDetail{}, parseErrorsError(parsed.Errors)
 	}
 
-	profile.Rules = rulesToStorage(parsed.Rules)
+	profile.Rules = rulesToStorageWithExisting(parsed.Rules, profile.Rules)
 	profile.UpdatedAt = s.now()
 	if err := s.writeProfile(profile); err != nil {
 		return app.HostsProfileDetail{}, err
@@ -316,7 +316,24 @@ func profileContent(profile storage.Profile) string {
 
 // rulesToStorage 把解析出的文本规则转为 v2 存储模型。
 // 注释占位规则保留原文（禁用规则因此不丢）；新规则来源记为 Manual。
-func rulesToStorage(parsed []hostsfile.Rule) []storage.HostRule {
+//
+// 规则同一性（review 建议项）：按 (IP, domains) 匹配旧规则并沿用其
+// ID 与 Source（订阅/广告拦截溯源不被静默改写），匹配不到或出现
+// 重复键时才分配新 ID。注释规则没有稳定身份，始终新建。
+func rulesToStorageWithExisting(parsed []hostsfile.Rule, existing []storage.HostRule) []storage.HostRule {
+	type key struct {
+		ip      string
+		domains string
+	}
+	pool := map[key][]int{} // key -> 旧规则下标队列
+	for i, rule := range existing {
+		if rule.IP == nil {
+			continue
+		}
+		k := key{ip: rule.IP.String(), domains: strings.Join(rule.Domains, ",")}
+		pool[k] = append(pool[k], i)
+	}
+
 	rules := make([]storage.HostRule, 0, len(parsed))
 	for _, rule := range parsed {
 		if rule.CommentOnly {
@@ -333,16 +350,30 @@ func rulesToStorage(parsed []hostsfile.Rule) []storage.HostRule {
 			})
 			continue
 		}
+		id, source := newUUID(), storage.RuleSource{Type: "Manual"}
+		if rule.IP != nil {
+			k := key{ip: rule.IP.String(), domains: strings.Join(rule.Domains, ",")}
+			if queue := pool[k]; len(queue) > 0 {
+				old := existing[queue[0]]
+				pool[k] = queue[1:]
+				id, source = old.ID, old.Source
+			}
+		}
 		rules = append(rules, storage.HostRule{
-			ID:      newUUID(),
+			ID:      id,
 			IP:      rule.IP,
 			Domains: append([]string(nil), rule.Domains...),
 			Enabled: rule.Enabled,
 			Comment: rule.Comment,
-			Source:  storage.RuleSource{Type: "Manual"},
+			Source:  source,
 		})
 	}
 	return rules
+}
+
+// rulesToStorage 是新建场景的便捷形式（无旧规则可匹配）。
+func rulesToStorage(parsed []hostsfile.Rule) []storage.HostRule {
+	return rulesToStorageWithExisting(parsed, nil)
 }
 
 func parseErrorsError(errs []hostsfile.ParseError) error {

@@ -173,3 +173,100 @@ func TestApplyBackupFailureClassifiedAsBackupError(t *testing.T) {
 		t.Fatalf("hosts touched on backup failure: %q", data)
 	}
 }
+
+// 回归（review 建议项 1）：应用「无启用规则」的 profile 后不得误报 drift。
+func TestApplyEmptyProfileDoesNotReportDrift(t *testing.T) {
+	profile := testProfile("11111111-1111-4111-8111-111111111111", "empty",
+		"# only comments\n# 127.0.0.1 disabled.test\n")
+	env := newTestEnv(t, "127.0.0.1 keep.me\n", profile)
+
+	plan, err := env.service.PreviewApply(context.Background(), profile.ID, nil)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if _, err := env.service.Apply(context.Background(), plan.ID, nil); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	state, err := env.service.AppliedState(context.Background())
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if state.Drifted {
+		t.Fatalf("fresh apply of empty profile reported drift: %+v", state)
+	}
+	if state.ProfileID != profile.ID {
+		t.Fatalf("state profile = %q", state.ProfileID)
+	}
+
+	// 外部写入一个块（本服务记录的是空块哈希）→ drift
+	raw, _ := os.ReadFile(env.hostsPath)
+	if err := os.WriteFile(env.hostsPath, append(raw, []byte("# ---- mHost start ----\n6.6.6.6 x.com\n# ---- mHost end ----\n")...), 0o644); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+	state, _ = env.service.AppliedState(context.Background())
+	if !state.Drifted {
+		t.Fatal("external block should be drift")
+	}
+}
+
+// 回归（review 建议项 2）：保存时按 (IP, domains) 沿用旧规则 ID 与 Source。
+func TestSaveProfilePreservesRuleIdentityAndSource(t *testing.T) {
+	profile := testProfile("11111111-1111-4111-8111-111111111111", "env",
+		"127.0.0.1 keep.test\n")
+	// 造一条 Remote 来源规则
+	profile.Rules = append(profile.Rules, storage.HostRule{
+		ID:      "66666666-6666-4666-8666-666666666666",
+		IP:      ipPtr(t, "10.0.0.1"),
+		Domains: []string{"remote-ads.test"},
+		Enabled: true,
+		Source:  storage.RuleSource{Type: "Remote", SourceID: "sub-1", SourceName: "订阅"},
+	})
+	env := newTestEnv(t, "127.0.0.1 keep.me\n", profile)
+
+	detail, err := env.service.LoadProfile(context.Background(), profile.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	keepID := profile.Rules[0].ID
+
+	// 编辑一行（改 keep.test 的 IP）后保存
+	edited := strings.Replace(detail.Content, "127.0.0.1 keep.test", "127.0.0.2 keep.test", 1)
+	saved, err := env.service.SaveProfile(context.Background(), profile.ID, edited, detail.Revision)
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	_ = saved
+
+	stored, err := env.service.loadProfile(profile.ID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(stored.Rules) != 2 {
+		t.Fatalf("rules = %+v", stored.Rules)
+	}
+	var keep, remote *storage.HostRule
+	for i := range stored.Rules {
+		switch stored.Rules[i].Domains[0] {
+		case "keep.test":
+			keep = &stored.Rules[i]
+		case "remote-ads.test":
+			remote = &stored.Rules[i]
+		}
+	}
+	// 被编辑的规则（IP 变了）正确换新 ID
+	if keep == nil || keep.ID == keepID {
+		t.Fatalf("edited rule should get a new ID: %+v", keep)
+	}
+	// Remote 规则 Source 不被改写
+	if remote == nil || remote.Source.Type != "Remote" || remote.Source.SourceID != "sub-1" {
+		t.Fatalf("remote source rewritten: %+v", remote)
+	}
+	if remote.ID != "66666666-6666-4666-8666-666666666666" {
+		t.Fatalf("remote id changed: %q", remote.ID)
+	}
+	// 改动的规则换新 ID
+	if keep.IP.String() != "127.0.0.2" {
+		t.Fatalf("edited ip not saved: %q", keep.IP)
+	}
+}
