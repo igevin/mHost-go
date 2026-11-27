@@ -1,0 +1,21 @@
+{
+  "rules": [],
+  "errors": [
+    {
+      "line": 1,
+      "kind": "malformed_line",
+      "token": "http://example.com 127.0.0.1"
+    },
+    {
+      "line": 2,
+      "kind": "malformed_line",
+      "token": "example.com:8080 127.0.0.1"
+    },
+    {
+      "line": 3,
+      "kind": "invalid_ip",
+      "token": "abc:def"
+    }
+  ],
+  "duplicates": []
+}

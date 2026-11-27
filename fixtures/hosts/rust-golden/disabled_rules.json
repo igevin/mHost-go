@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": "127.0.0.1",
+      "domains": [
+        "live.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 2,
+      "ip": null,
+      "domains": [],
+      "comment": "# 10.0.0.9 disabled.com",
+      "comment_only": true,
+      "enabled": false
+    },
+    {
+      "line": 3,
+      "ip": null,
+      "domains": [],
+      "comment": "#10.0.0.9 tight.com",
+      "comment_only": true,
+      "enabled": false
+    }
+  ],
+  "errors": [],
+  "duplicates": []
+}

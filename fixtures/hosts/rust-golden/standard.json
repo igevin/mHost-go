@@ -1,0 +1,66 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": "127.0.0.1",
+      "domains": [
+        "example.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 2,
+      "ip": "::1",
+      "domains": [
+        "localhost"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 3,
+      "ip": "2001:db8::1",
+      "domains": [
+        "example.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 4,
+      "ip": "127.0.0.1",
+      "domains": [
+        "a.com",
+        "b.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 5,
+      "ip": "127.0.0.1",
+      "domains": [
+        "with.comment.com"
+      ],
+      "comment": "dev note",
+      "comment_only": false,
+      "enabled": true
+    }
+  ],
+  "errors": [],
+  "duplicates": [
+    {
+      "domain": "example.com",
+      "lines": [
+        1,
+        3
+      ],
+      "kind": "different_ip"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "rules": [
+    {
+      "line": 4,
+      "ip": "127.0.0.1",
+      "domains": [
+        "after-blanks.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    }
+  ],
+  "errors": [],
+  "duplicates": []
+}

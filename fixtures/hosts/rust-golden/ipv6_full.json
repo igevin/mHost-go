@@ -1,0 +1,26 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": "2001:db8:85a3::8a2e:370:7334",
+      "domains": [
+        "full.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 2,
+      "ip": "::",
+      "domains": [
+        "localhost2.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    }
+  ],
+  "errors": [],
+  "duplicates": []
+}

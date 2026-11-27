@@ -1,0 +1,14 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": null,
+      "domains": [],
+      "comment": "# only a comment",
+      "comment_only": true,
+      "enabled": false
+    }
+  ],
+  "errors": [],
+  "duplicates": []
+}

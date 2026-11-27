@@ -1,0 +1,40 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": null,
+      "domains": [],
+      "comment": "# header comment",
+      "comment_only": true,
+      "enabled": false
+    },
+    {
+      "line": 2,
+      "ip": null,
+      "domains": [],
+      "comment": "#footer without space",
+      "comment_only": true,
+      "enabled": false
+    },
+    {
+      "line": 3,
+      "ip": "127.0.0.1",
+      "domains": [
+        "example.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 4,
+      "ip": null,
+      "domains": [],
+      "comment": "# just another",
+      "comment_only": true,
+      "enabled": false
+    }
+  ],
+  "errors": [],
+  "duplicates": []
+}

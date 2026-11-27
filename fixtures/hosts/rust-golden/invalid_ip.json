@@ -1,0 +1,21 @@
+{
+  "rules": [],
+  "errors": [
+    {
+      "line": 1,
+      "kind": "invalid_ip",
+      "token": "999.999.999.999"
+    },
+    {
+      "line": 2,
+      "kind": "invalid_ip",
+      "token": "256.1.1.1"
+    },
+    {
+      "line": 3,
+      "kind": "invalid_ip",
+      "token": "1.2.3.4.5"
+    }
+  ],
+  "duplicates": []
+}

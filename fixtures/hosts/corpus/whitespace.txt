@@ -1,0 +1,2 @@
+  127.0.0.1	spaced.com  
+	::1	localhost

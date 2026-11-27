@@ -1,0 +1,62 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": "127.0.0.1",
+      "domains": [
+        "analytics.163.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 2,
+      "ip": "127.0.0.1",
+      "domains": [
+        "163.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 3,
+      "ip": "127.0.0.1",
+      "domains": [
+        "0.ackzany.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 4,
+      "ip": "127.0.0.1",
+      "domains": [
+        "0.0.0.0.creative.hpyrdr.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 5,
+      "ip": "127.0.0.1",
+      "domains": [
+        "123.example.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    }
+  ],
+  "errors": [
+    {
+      "line": 6,
+      "kind": "invalid_domain",
+      "token": "12345"
+    }
+  ],
+  "duplicates": []
+}

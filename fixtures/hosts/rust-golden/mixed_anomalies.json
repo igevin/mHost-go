@@ -1,0 +1,42 @@
+{
+  "rules": [
+    {
+      "line": 1,
+      "ip": "127.0.0.1",
+      "domains": [
+        "ok.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    },
+    {
+      "line": 3,
+      "ip": "127.0.0.1",
+      "domains": [
+        "ok2.com"
+      ],
+      "comment": null,
+      "comment_only": false,
+      "enabled": true
+    }
+  ],
+  "errors": [
+    {
+      "line": 2,
+      "kind": "malformed_line",
+      "token": "bad_line"
+    },
+    {
+      "line": 4,
+      "kind": "invalid_ip",
+      "token": "999.999.999.999"
+    },
+    {
+      "line": 5,
+      "kind": "invalid_domain",
+      "token": "-bad.com"
+    }
+  ],
+  "duplicates": []
+}
