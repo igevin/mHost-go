@@ -446,6 +446,14 @@ func (s *Service) RestoreBackup(ctx context.Context, workspaceID, backupID strin
 		return app.WriteReceipt{}, &app.UIError{Kind: app.ErrorNotFound, Message: "Backup was not found in this workspace", Retryable: true}
 	}
 	root := entry.workspace.Root
+	// 纵深防御：即使登记被绕过，恢复目标也必须在根目录内。
+	if target.Path == "" || filepath.IsAbs(target.Path) {
+		return app.WriteReceipt{}, &app.UIError{Kind: app.ErrorInvalidPath, Path: target.Path, Message: "Backup path is invalid", Retryable: false}
+	}
+	cleaned := filepath.Clean(target.Path)
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return app.WriteReceipt{}, &app.UIError{Kind: app.ErrorInvalidPath, Path: target.Path, Message: "Backup path escapes the workspace", Retryable: false}
+	}
 	if _, err := os.Stat(filepath.Join(root, target.Path)); err != nil {
 		return app.WriteReceipt{}, &app.UIError{Kind: app.ErrorNotFound, Path: target.Path, Message: "Current file is missing; refusing to restore over nothing", Cause: err}
 	}
@@ -462,7 +470,11 @@ func (s *Service) RestoreBackup(ctx context.Context, workspaceID, backupID strin
 	safety.WorkspaceID = workspaceID
 	result := s.writeContent(root, target.Path, target.Entity, operationID, content)
 	result.Backup = &safety
-	result.Preservation = app.PreserveRestored
+	// 只有实际写入或确认一致才标记 restored；失败结果保留写入路径
+	// 给出的 Preservation，避免与 Status/Issue 矛盾。
+	if result.Status == app.WriteWritten || result.Status == app.WriteUnchanged {
+		result.Preservation = app.PreserveRestored
+	}
 	receipt := s.commit(entry, operationID, entry.workspace.Revision, []app.WriteResult{result})
 	// 内容与备份相同（WriteUnchanged）视为恢复成功：文件本就处于
 	// 备份所记录的状态。

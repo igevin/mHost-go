@@ -137,3 +137,108 @@ func TestCreateWorkspaceUsesValidatedAbsolutePath(t *testing.T) {
 		t.Fatalf("root = %q, want cleaned absolute %q", workspace.Root, want)
 	}
 }
+
+// TestBackupContentRejectsBadID 确保 backupID 不能越界读取。
+func TestBackupContentRejectsBadID(t *testing.T) {
+	store := newTestStore()
+	if _, err := store.BackupContent(t.TempDir(), "../../etc/passwd"); err == nil {
+		t.Fatal("path-traversal backupID must be rejected")
+	}
+	if _, err := store.BackupContent(t.TempDir(), "not-a-uuid"); err == nil {
+		t.Fatal("non-uuid backupID must be rejected")
+	}
+}
+
+// 构造带路径穿越记录的备份索引：恢复不得逃逸出工作副本。
+func TestBackupIndexTraversalRecordIsRejected(t *testing.T) {
+	service := newTestService(t)
+	workspace := inspectAndCopy(t, service, copyFixture(t, "v2-full"))
+
+	// 写入恶意备份登记：path 指向工作副本外的文件。
+	outside := filepath.Join(t.TempDir(), "evil.txt")
+	if err := os.WriteFile(outside, []byte("innocent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	escapePath, err := filepath.Rel(workspace.Root, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupsDir := filepath.Join(workspace.Root, DirBackups)
+	if err := os.MkdirAll(backupsDir, DirPerm); err != nil {
+		t.Fatal(err)
+	}
+	malicious := `{"backups":[{"id":"99999999-9999-4999-8999-999999999999","entity":"manifest","path":"` + filepath.ToSlash(escapePath) + `","created_at":"2026-11-27T00:00:00Z","operation_id":"op-evil"}]}`
+	if err := os.WriteFile(filepath.Join(backupsDir, "index.json"), []byte(malicious), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backupsDir, "99999999-9999-4999-8999-999999999999.json"), []byte("pwned"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 登记里的恶意记录必须被丢弃。
+	backups, err := service.ListBackups(context.Background(), workspace.ID)
+	if err != nil {
+		t.Fatalf("list backups: %v", err)
+	}
+	for _, backup := range backups {
+		if backup.ID == "99999999-9999-4999-8999-999999999999" {
+			t.Fatal("traversal backup record must be dropped from listing")
+		}
+	}
+	// 直接请求恢复也必须失败，且工作副本外的文件不被改动。
+	if _, err := service.RestoreBackup(context.Background(), workspace.ID, "99999999-9999-4999-8999-999999999999"); err == nil {
+		t.Fatal("restore of traversal record must fail")
+	}
+	data, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "innocent" {
+		t.Fatalf("outside file overwritten: %q", data)
+	}
+}
+
+// 恢复失败时结果不得标记为 PreserveRestored。
+func TestRestoreFailureNotMarkedRestored(t *testing.T) {
+	restoreOnly := false
+	volume := NewFaultyVolume(NewOSVolume(), Faults{
+		FailAtomicWrite: func(path string) bool {
+			return restoreOnly && strings.HasSuffix(path, FileManifest)
+		},
+	})
+	service := newTestService(t, WithVolume(volume))
+	workspace := inspectAndCopy(t, service, copyFixture(t, "v2-full"))
+
+	preview, err := service.PreviewValidationChange(context.Background(), workspace.ID)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if _, err := service.SaveValidationChange(context.Background(), workspace.ID, preview.ID); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	backups, err := service.ListBackups(context.Background(), workspace.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifestBackup *app.BackupRef
+	for i := range backups {
+		if backups[i].Entity == "manifest" {
+			manifestBackup = &backups[i]
+		}
+	}
+	if manifestBackup == nil {
+		t.Fatalf("no manifest backup: %v", backups)
+	}
+	restoreOnly = true
+	receipt, err := service.RestoreBackup(context.Background(), workspace.ID, manifestBackup.ID)
+	if err == nil {
+		t.Fatal("expected restore failure")
+	}
+	result := receipt.Results[0]
+	if result.Status != app.WriteFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Preservation == app.PreserveRestored {
+		t.Fatalf("failed restore must not be marked restored: %+v", result)
+	}
+}

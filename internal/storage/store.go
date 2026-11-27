@@ -345,9 +345,27 @@ func (s *Store) Backups(root string) ([]app.BackupRef, error) {
 	return refs, nil
 }
 
-// BackupContent 返回备份登记的原始文件内容。
+// BackupContent 返回备份登记的原始文件内容。backupID 必须是本服务
+// 生成的 UUID，拒绝任何路径分隔符与 .. 越界。
 func (s *Store) BackupContent(root, backupID string) ([]byte, error) {
+	if !validUUID(backupID) {
+		return nil, fmt.Errorf("invalid backup id %q", backupID)
+	}
 	return s.vol.ReadFile(filepath.Join(root, DirBackups, backupID+".json"))
+}
+
+// validBackupRecord 校验登记记录：id 必须是 UUID，path 必须是
+// 工作副本内的相对路径（拒绝绝对路径与 .. 逃逸）。备份索引来自
+// 磁盘，可能是用户从任意来源复制的目录，加载时统一丢弃非法记录。
+func validBackupRecord(record backupRecord) bool {
+	if !validUUID(record.ID) {
+		return false
+	}
+	if record.Path == "" || filepath.IsAbs(record.Path) {
+		return false
+	}
+	cleaned := filepath.Clean(record.Path)
+	return cleaned != ".." && !strings.HasPrefix(cleaned, ".."+string(filepath.Separator))
 }
 
 func (s *Store) loadBackupIndex(root string) (backupIndex, error) {
@@ -365,6 +383,14 @@ func (s *Store) loadBackupIndex(root string) (backupIndex, error) {
 	if index.Backups == nil {
 		index.Backups = []backupRecord{}
 	}
+	// 丢弃非法记录：path 越界或 id 非 UUID 的条目不得进入恢复路径。
+	kept := index.Backups[:0]
+	for _, record := range index.Backups {
+		if validBackupRecord(record) {
+			kept = append(kept, record)
+		}
+	}
+	index.Backups = kept
 	return index, nil
 }
 

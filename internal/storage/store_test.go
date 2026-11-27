@@ -190,15 +190,15 @@ func TestRecordBackupAndList(t *testing.T) {
 	}
 
 	now := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
-	ref, err := store.RecordBackup(root, filepath.Join("profiles", "hosts", "p.json"), "profile", "op-1", now, "b-1")
+	ref, err := store.RecordBackup(root, filepath.Join("profiles", "hosts", "p.json"), "profile", "op-1", now, "11111111-2222-4222-8222-222222222222")
 	if err != nil {
 		t.Fatalf("record backup: %v", err)
 	}
-	if ref.ID != "b-1" || ref.OperationID != "op-1" {
+	if ref.ID != "11111111-2222-4222-8222-222222222222" || ref.OperationID != "op-1" {
 		t.Fatalf("unexpected ref: %+v", ref)
 	}
 
-	content, err := store.BackupContent(root, "b-1")
+	content, err := store.BackupContent(root, "11111111-2222-4222-8222-222222222222")
 	if err != nil {
 		t.Fatalf("backup content: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestRecordBackupAndList(t *testing.T) {
 
 func TestRecordBackupFailsForMissingSource(t *testing.T) {
 	store := newTestStore()
-	_, err := store.RecordBackup(t.TempDir(), "missing.json", "profile", "op", time.Now(), "b-x")
+	_, err := store.RecordBackup(t.TempDir(), "missing.json", "profile", "op", time.Now(), "11111111-2222-4222-8222-222222222299")
 	if err == nil {
 		t.Fatal("expected error for missing backup source")
 	}

@@ -64,7 +64,9 @@ backups/index.json         # 备份登记
 3. `WriteAtomic`：同目录临时文件 + fsync + rename；失败不留半文件、不改原文件；
 4. 读回字节比对，不一致记 `readback_mismatch`，禁止全局成功声明。
 
-恢复（`RestoreBackup`）：恢复当前文件前先生成安全备份；恢复后读回验证；回执 `Preservation: restored` 并附带安全备份引用。恢复只允许在工作副本上进行。
+恢复（`RestoreBackup`）：恢复当前文件前先生成安全备份；恢复后读回验证；回执 `Preservation: restored`（仅在实际写入或确认一致时标记，失败结果保留写入路径的 Preservation）并附带安全备份引用。恢复只允许在工作副本上进行。
+
+**备份登记不可信**：`backups/index.json` 随工作副本来自磁盘，可能是任意来源目录。加载时统一校验并丢弃非法记录——备份 ID 必须是 UUID，path 必须是根目录内的相对路径（拒绝绝对路径与 `..` 逃逸）；`BackupContent` 对 ID 做同样校验；`RestoreBackup` 在写入前再做一次纵深防御的路径检查。
 
 备份登记（`backups/index.json`）随工作副本持久化，`ListBackups` 返回当前副本内登记的全部备份（实体、相对路径、时间、来源操作）。
 
