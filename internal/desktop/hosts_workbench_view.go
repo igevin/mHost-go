@@ -227,8 +227,12 @@ func (m *HostsWorkbenchModel) profileHeader(c *ui.Context) {
 			if ui.Button(c, "Delete").Disabled(m.busy() || profile.Protected).Clicked() {
 				m.RequestDelete(profile.ID)
 			}
-			if ui.Button(c, "Export…").Disabled(m.busy() || m.Picker == nil).Clicked() {
+			exportDisabled := m.busy() || m.Picker == nil || m.Modified()
+			if ui.Button(c, "Export…").Disabled(exportDisabled).Clicked() {
 				m.ExportSelected()
+			}
+			if m.Modified() {
+				ui.Text(c, "Export stores the saved profile · save first").FontSize(11).TextColor(theme.TextMuted)
 			}
 		}
 		if m.Admin != nil && ui.Button(c, "Import…").Disabled(m.busy() || m.Picker == nil).Clicked() {
