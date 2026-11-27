@@ -97,6 +97,7 @@ func (s *HostsService) ListProfiles(ctx context.Context) ([]app.HostsProfile, er
 		profiles = append(profiles, app.HostsProfile{
 			ID:        profile.id,
 			Name:      profile.name,
+			Enabled:   true,
 			Protected: profile.protected,
 			RuleCount: countRules(profile.content),
 			Revision:  profile.revision,
@@ -119,6 +120,7 @@ func (s *HostsService) LoadProfile(ctx context.Context, profileID string) (app.H
 		HostsProfile: app.HostsProfile{
 			ID:        profile.id,
 			Name:      profile.name,
+			Enabled:   true,
 			Protected: profile.protected,
 			RuleCount: countRules(profile.content),
 			Revision:  profile.revision,
@@ -146,6 +148,7 @@ func (s *HostsService) SaveProfile(ctx context.Context, profileID string, conten
 		HostsProfile: app.HostsProfile{
 			ID:        profile.id,
 			Name:      profile.name,
+			Enabled:   true,
 			Protected: profile.protected,
 			RuleCount: countRules(profile.content),
 			Revision:  profile.revision,

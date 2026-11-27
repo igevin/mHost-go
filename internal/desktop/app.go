@@ -141,6 +141,10 @@ func (a *App) ready() {
 	})
 	a.Model.SetDispatch(a.window.Update)
 	a.Model.SetOnSafeToQuit(a.finishQuit)
+	// Starter 可选接口：窗口就绪后自动加载（Alpha 产品形态无手动 Load）。
+	if starter, ok := a.Model.(interface{ Start() }); ok {
+		starter.Start()
+	}
 	if pickerModel, ok := a.Model.(interface{ DirectoryPicker() app.DirectoryPicker }); ok {
 		if picker, ok := pickerModel.DirectoryPicker().(interface{ SetParent(*mygo.Window) }); ok {
 			picker.SetParent(a.window)

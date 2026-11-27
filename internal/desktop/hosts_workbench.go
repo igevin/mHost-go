@@ -47,8 +47,12 @@ type HostsWorkbenchModel struct {
 	Problem     *app.UIError
 
 	PendingSwitch string
+	PendingDelete string
 	QuitRequested bool
 	DemoMode      bool
+	Chromeless    bool // Alpha 壳嵌入时隐藏自身标题栏（壳已有导航头）
+	Admin         ProfileAdmin
+	SearchQuery   string
 	OnSafeToQuit  func()
 
 	// ProblemsSplit is the editor's share (percent) of the vertical split

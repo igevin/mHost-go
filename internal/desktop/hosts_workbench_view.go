@@ -17,21 +17,9 @@ func (m *HostsWorkbenchModel) View(c *ui.Context) {
 	m.SyncFromEditor()
 	m.updateHostsDiagnostics()
 	ui.Column(c).Fill().Children(func() {
-		ui.Row(c).Gap(12).Padding(16, 20).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
-			ui.Column(c).Grow(1).Gap(3).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "mHost").FontSize(22).Bold()
-					ui.Badge(c, "Phase 2 · Hosts Rewrite Workbench")
-					if m.DemoMode {
-						ui.Badge(c, "Demo service · no /etc/hosts writes")
-					}
-				})
-				ui.Text(c, "Edit hosts profiles and stage the managed-block rewrite").FontSize(12).TextColor(theme.TextMuted)
-			})
-			if ui.Button(c, "Reload Profiles").Disabled(m.busy()).Clicked() {
-				m.Load()
-			}
-		})
+		if !m.Chromeless {
+			m.chromeHeader(c, theme)
+		}
 
 		if m.Problem != nil {
 			ui.Row(c).Gap(10).Padding(10, 20).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
@@ -73,6 +61,47 @@ func (m *HostsWorkbenchModel) View(c *ui.Context) {
 		})
 	})
 	m.pendingSwitchDialog(c)
+	m.pendingDeleteDialog(c)
+}
+
+func (m *HostsWorkbenchModel) pendingDeleteDialog(c *ui.Context) {
+	if m.PendingDelete == "" {
+		return
+	}
+	open := true
+	name := m.PendingDelete
+	if profile := m.profileByID(m.PendingDelete); profile != nil {
+		name = profile.Name
+	}
+	message := fmt.Sprintf("Delete profile %q? This cannot be undone.", name)
+	switch ui.AlertDialog(c, &open, "Delete profile", message, "Delete", "Cancel") {
+	case 0:
+		m.ConfirmDelete()
+	case 1:
+		m.CancelDelete()
+	default:
+		if !open {
+			m.CancelDelete()
+		}
+	}
+}
+
+func (m *HostsWorkbenchModel) chromeHeader(c *ui.Context, theme *ui.Theme) {
+	ui.Row(c).Gap(12).Padding(16, 20).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
+		ui.Column(c).Grow(1).Gap(3).Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "mHost").FontSize(22).Bold()
+				ui.Badge(c, "Phase 2 · Hosts Rewrite Workbench")
+				if m.DemoMode {
+					ui.Badge(c, "Demo service · no /etc/hosts writes")
+				}
+			})
+			ui.Text(c, "Edit hosts profiles and stage the managed-block rewrite").FontSize(12).TextColor(theme.TextMuted)
+		})
+		if ui.Button(c, "Reload Profiles").Disabled(m.busy()).Clicked() {
+			m.Load()
+		}
+	})
 }
 
 func (m *HostsWorkbenchModel) hostsEmptyView(c *ui.Context) {
@@ -101,9 +130,24 @@ func (m *HostsWorkbenchModel) hostsEmptyView(c *ui.Context) {
 func (m *HostsWorkbenchModel) profileSidebar(c *ui.Context) {
 	theme := c.Theme()
 	ui.Column(c).Width(230).FillHeight().Padding(10, 12).Gap(4).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
-		ui.Text(c, "PROFILES").FontSize(11).TextColor(theme.TextMuted)
-		for _, profile := range m.Profiles {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "PROFILES").FontSize(11).TextColor(theme.TextMuted).Grow(1)
+			if m.Admin != nil && ui.Button(c, "＋ New").Disabled(m.busy()).Clicked() {
+				m.CreateNewProfile()
+			}
+		})
+		if len(m.Profiles) > 4 {
+			ui.TextInput(c, &m.SearchQuery)
+		}
+		profiles := m.filteredProfiles()
+		if len(profiles) == 0 && m.SearchQuery != "" {
+			ui.Text(c, "No profiles match").FontSize(12).TextColor(theme.TextMuted)
+		}
+		for _, profile := range profiles {
 			label := profile.Name
+			if !profile.Enabled {
+				label += "  ⏸"
+			}
 			if draft := m.drafts[profile.ID]; draft != nil && draft.content != draft.savedContent {
 				label += " ●"
 			}
@@ -160,6 +204,21 @@ func (m *HostsWorkbenchModel) profileHeader(c *ui.Context) {
 		}
 		if profile != nil {
 			ui.Text(c, fmt.Sprintf("%d rules", profile.RuleCount)).FontSize(12).TextColor(theme.TextMuted)
+		}
+		if m.Admin != nil && profile != nil {
+			enableLabel := "Disable"
+			if !profile.Enabled {
+				enableLabel = "Enable"
+			}
+			if ui.Button(c, enableLabel).Disabled(m.busy()).Clicked() {
+				m.ToggleSelectedEnabled()
+			}
+			if ui.Button(c, "Duplicate").Disabled(m.busy()).Clicked() {
+				m.DuplicateSelected()
+			}
+			if ui.Button(c, "Delete").Disabled(m.busy() || profile.Protected).Clicked() {
+				m.RequestDelete(profile.ID)
+			}
 		}
 		ui.Spacer(c)
 		ui.Text(c, m.appliedStatusText()).FontSize(12).TextColor(theme.TextMuted)

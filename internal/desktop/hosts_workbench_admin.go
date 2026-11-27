@@ -1,0 +1,211 @@
+package desktop
+
+import (
+	"context"
+	"fmt"
+
+	app "github.com/igevin/mHost-go/internal/app"
+	"github.com/igevin/mHost-go/internal/app/hostssvc"
+)
+
+// 本文件是 #25 Alpha 产品化对 HostsWorkbenchModel 的扩展：
+// Profile 管理（新建/复制/启停/删除）与列表搜索。Admin 为 nil
+// 时（demo 服务）相关入口隐藏，模型行为与 #16 验证时一致。
+
+// ProfileAdmin 是 workbench 对服务的管理面要求；由 hostssvc 实现。
+type ProfileAdmin = hostssvc.ProfileAdmin
+
+// filteredProfiles 应用搜索过滤（大小写不敏感，匹配名称）。
+func (m *HostsWorkbenchModel) filteredProfiles() []app.HostsProfile {
+	query := m.SearchQuery
+	if query == "" {
+		return m.Profiles
+	}
+	var out []app.HostsProfile
+	for _, profile := range m.Profiles {
+		if containsFold(profile.Name, query) {
+			out = append(out, profile)
+		}
+	}
+	return out
+}
+
+func containsFold(text, query string) bool {
+	return len(query) == 0 || indexFold(text, query) >= 0
+}
+
+func indexFold(text, query string) int {
+	for i := 0; i+len(query) <= len(text); i++ {
+		if equalFoldASCII(text[i:i+len(query)], query) {
+			return i
+		}
+	}
+	return -1
+}
+
+func equalFoldASCII(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if 'A' <= ca && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if 'A' <= cb && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
+}
+
+// CreateNewProfile 新建 profile 并选中。名称为 "New Profile" 系列去重。
+func (m *HostsWorkbenchModel) CreateNewProfile() {
+	if m.busy() || m.Admin == nil {
+		return
+	}
+	id, ctx := m.beginOperation()
+	m.Problem = nil
+	name := uniqueProfileName("New Profile", m.profileNames())
+	m.runAsync(func() {
+		detail, err := m.Admin.CreateProfile(ctx, name, "# New profile\n")
+		if err != nil {
+			m.dispatchError(id, "create_profile", err)
+			return
+		}
+		m.dispatch(func() {
+			if !m.current(id) {
+				return
+			}
+			m.refreshAfterAdminChange(id, ctx, detail.ID)
+		})
+	})
+}
+
+// DuplicateSelected 复制当前 profile 并选中副本。
+func (m *HostsWorkbenchModel) DuplicateSelected() {
+	if m.busy() || m.Admin == nil || m.SelectedID == "" {
+		return
+	}
+	id, ctx := m.beginOperation()
+	m.Problem = nil
+	profileID := m.SelectedID
+	m.runAsync(func() {
+		detail, err := m.Admin.DuplicateProfile(ctx, profileID)
+		if err != nil {
+			m.dispatchError(id, "duplicate_profile", err)
+			return
+		}
+		m.dispatch(func() {
+			if !m.current(id) {
+				return
+			}
+			m.refreshAfterAdminChange(id, ctx, detail.ID)
+		})
+	})
+}
+
+// ToggleSelectedEnabled 切换当前 profile 的启用标记（存储态）。
+func (m *HostsWorkbenchModel) ToggleSelectedEnabled() {
+	if m.busy() || m.Admin == nil || m.SelectedID == "" {
+		return
+	}
+	profile := m.selectedProfile()
+	if profile == nil {
+		return
+	}
+	id, ctx := m.beginOperation()
+	m.Problem = nil
+	profileID, enabled := profile.ID, !profile.Enabled
+	m.runAsync(func() {
+		if _, err := m.Admin.SetProfileEnabled(ctx, profileID, enabled); err != nil {
+			m.dispatchError(id, "set_enabled", err)
+			return
+		}
+		m.dispatch(func() {
+			if !m.current(id) {
+				return
+			}
+			m.refreshProfiles(id, ctx)
+		})
+	})
+}
+
+// RequestDelete 弹确认后删除；ConfirmDelete/CancelDelete 由对话框驱动。
+func (m *HostsWorkbenchModel) RequestDelete(profileID string) {
+	if m.busy() || m.Admin == nil || profileID == "" {
+		return
+	}
+	profile := m.profileByID(profileID)
+	if profile == nil {
+		return
+	}
+	if profile.Protected {
+		m.Problem = &app.UIError{Kind: app.ErrorValidation, Message: fmt.Sprintf("Profile %q is protected and cannot be deleted", profile.Name)}
+		return
+	}
+	m.PendingDelete = profileID
+}
+
+func (m *HostsWorkbenchModel) CancelDelete() { m.PendingDelete = "" }
+
+func (m *HostsWorkbenchModel) ConfirmDelete() {
+	profileID := m.PendingDelete
+	if m.busy() || m.Admin == nil || profileID == "" {
+		return
+	}
+	m.PendingDelete = ""
+	id, ctx := m.beginOperation()
+	m.Problem = nil
+	m.runAsync(func() {
+		if err := m.Admin.DeleteProfile(ctx, profileID); err != nil {
+			m.dispatchError(id, "delete_profile", err)
+			return
+		}
+		m.dispatch(func() {
+			if !m.current(id) {
+				return
+			}
+			delete(m.drafts, profileID)
+			if m.SelectedID == profileID {
+				m.SelectedID = ""
+			}
+			m.refreshAfterAdminChange(id, ctx, "")
+		})
+	})
+}
+
+// refreshAfterAdminChange 刷新列表；selectID 非空时选中该项。
+func (m *HostsWorkbenchModel) refreshAfterAdminChange(id uint64, ctx context.Context, selectID string) {
+	m.refreshProfiles(id, ctx)
+	if selectID != "" {
+		m.switchToProfile(selectID)
+	}
+}
+
+func (m *HostsWorkbenchModel) profileNames() []string {
+	names := make([]string, 0, len(m.Profiles))
+	for _, profile := range m.Profiles {
+		names = append(names, profile.Name)
+	}
+	return names
+}
+
+func uniqueProfileName(base string, existing []string) string {
+	taken := map[string]bool{}
+	for _, name := range existing {
+		taken[name] = true
+	}
+	if !taken[base] {
+		return base
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s %d", base, i)
+		if !taken[candidate] {
+			return candidate
+		}
+	}
+}

@@ -219,6 +219,7 @@ func (s *Service) toAppProfile(profile storage.Profile) app.HostsProfile {
 	return app.HostsProfile{
 		ID:        profile.ID,
 		Name:      profile.Name,
+		Enabled:   profile.Enabled,
 		Protected: profile.Protected,
 		RuleCount: countEnabledRules(profile),
 		Revision:  profileRevision(profile),

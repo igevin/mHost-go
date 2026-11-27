@@ -2,18 +2,14 @@ package desktop
 
 import (
 	"fmt"
-	"net/netip"
 	"strings"
 
 	"github.com/egoist/mygo/ui/editor"
+	"github.com/igevin/mHost-go/internal/hostsfile"
 )
 
-type seenDomain struct {
-	line      int
-	ip        string
-	diagnosed bool
-}
-
+// HostsLanguage 是编辑器语法高亮（保留 mygo 组件内的 tokenizer，
+// 高亮规则与解析语义无关）。
 func HostsLanguage() *editor.Language {
 	return &editor.Language{
 		Name:        "Hosts",
@@ -54,44 +50,43 @@ func HostsLanguage() *editor.Language {
 	}
 }
 
+// HostsDiagnostics 复用 hostsfile.Parse（与真实服务、差分测试同一
+// 语义来源），把解析错误与重复域名映射为编辑器诊断：
+// 解析错误为 error 级；同 IP 重复 warning 级、异 IP 重复 error 级。
 func HostsDiagnostics(buffer *editor.Buffer) []editor.Diagnostic {
+	parsed := hostsfile.Parse(buffer.String())
 	var diagnostics []editor.Diagnostic
-	seen := make(map[string]*seenDomain)
-	for line := range buffer.LineCount() {
-		text := buffer.Line(line)
-		content := text
-		if comment := strings.IndexByte(content, '#'); comment >= 0 {
-			content = content[:comment]
-		}
-		fields := strings.Fields(content)
-		if len(fields) == 0 {
+	for _, err := range parsed.Errors {
+		line := err.Line - 1
+		if line < 0 || line >= buffer.LineCount() {
 			continue
 		}
-		if _, err := netip.ParseAddr(fields[0]); err != nil {
-			diagnostics = append(diagnostics, hostsDiagnostic(buffer, line, editor.SeverityError, "invalid IP address"))
-			continue
+		message := "invalid IP address"
+		switch err.Kind {
+		case hostsfile.ErrMalformedLine:
+			message = "malformed line — expected: IP followed by one or more domains"
+		case hostsfile.ErrInvalidDomain:
+			message = fmt.Sprintf("invalid domain %q", err.Token)
 		}
-		for _, domain := range fields[1:] {
-			previous, exists := seen[domain]
-			if !exists {
-				seen[domain] = &seenDomain{line: line, ip: fields[0]}
+		diagnostics = append(diagnostics, hostsDiagnostic(buffer, line, editor.SeverityError, message))
+	}
+	for _, duplicate := range parsed.Duplicates {
+		severity := editor.SeverityWarning
+		kind := " (same IP)"
+		if duplicate.Kind == hostsfile.DuplicateDifferentIP {
+			severity = editor.SeverityError
+			kind = " (different IP)"
+		}
+		for i, lineNumber := range duplicate.Lines {
+			line := lineNumber - 1
+			if line < 0 || line >= buffer.LineCount() {
 				continue
 			}
-			if !previous.diagnosed {
-				severity := editor.SeverityWarning
-				if previous.ip != fields[0] {
-					severity = editor.SeverityError
-				}
-				diagnostics = append(diagnostics, hostsDiagnostic(buffer, previous.line, severity, fmt.Sprintf("duplicate domain %q", domain)))
-				previous.diagnosed = true
+			message := fmt.Sprintf("duplicate domain %q", duplicate.Domain)
+			if i > 0 {
+				message += kind
 			}
-			kind := "same IP"
-			severity := editor.SeverityWarning
-			if previous.ip != fields[0] {
-				kind = "different IP"
-				severity = editor.SeverityError
-			}
-			diagnostics = append(diagnostics, hostsDiagnostic(buffer, line, severity, fmt.Sprintf("duplicate domain %q (%s)", domain, kind)))
+			diagnostics = append(diagnostics, hostsDiagnostic(buffer, line, severity, message))
 		}
 	}
 	return diagnostics
