@@ -30,11 +30,15 @@ func TestHostsLanguage_TokenizesCommentAndRule(t *testing.T) {
 	if language == nil || language.LineComment != "#" {
 		t.Fatalf("language = %+v", language)
 	}
-	tokens, _ := language.Tokenizer.(editor.TokenizerFunc).Tokenize("# comment", 0, nil)
+	tokenizer, ok := language.Tokenizer.(editor.TokenizerFunc)
+	if !ok {
+		t.Fatalf("tokenizer = %+v", language.Tokenizer)
+	}
+	tokens, _ := tokenizer.Tokenize("# comment", 0, nil)
 	if len(tokens) != 1 || tokens[0].Kind != editor.TokenComment {
 		t.Fatalf("comment tokens = %+v", tokens)
 	}
-	tokens, _ = language.Tokenizer.(editor.TokenizerFunc).Tokenize("127.0.0.1 api.test # local", 0, nil)
+	tokens, _ = tokenizer.Tokenize("127.0.0.1 api.test # local", 0, nil)
 	if len(tokens) < 3 || tokens[len(tokens)-1].Kind != editor.TokenComment {
 		t.Fatalf("rule tokens = %+v", tokens)
 	}

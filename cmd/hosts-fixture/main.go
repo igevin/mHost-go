@@ -22,7 +22,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := hostsfixture.Generate(file, *lines); err != nil {
-		file.Close()
+		_ = file.Close()
 		fmt.Fprintf(os.Stderr, "generate fixture: %v\n", err)
 		os.Exit(1)
 	}
