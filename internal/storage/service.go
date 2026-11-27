@@ -115,6 +115,27 @@ func (s *Service) Inspect(ctx context.Context, sourceRoot string) (app.Workspace
 	return workspace, nil
 }
 
+// InspectWritable 与 Inspect 相同，但把工作区标记为可写：
+// 供原地迁移/直接管理模式使用（Alpha 首次启动对真实数据目录
+// 就地升级）。常规"探查 → 工作副本"流程仍用 Inspect + CreateWorkspace，
+// 避免误把源目录当副本写。
+func (s *Service) InspectWritable(ctx context.Context, sourceRoot string) (app.Workspace, error) {
+	workspace, err := s.Inspect(ctx, sourceRoot)
+	if err != nil {
+		return workspace, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, err := s.workspace(workspace.ID)
+	if err != nil {
+		return app.Workspace{}, err
+	}
+	updated := cloneWorkspace(entry.workspace)
+	updated.Access = app.AccessWritable
+	entry.workspace = cloneWorkspace(updated)
+	return updated, nil
+}
+
 func (s *Service) Refresh(ctx context.Context, workspaceID string) (app.Workspace, error) {
 	if err := ctx.Err(); err != nil {
 		return app.Workspace{}, err

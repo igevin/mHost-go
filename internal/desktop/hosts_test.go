@@ -18,7 +18,7 @@ func TestHostsDiagnostics_InvalidIPAndDuplicateDomain(t *testing.T) {
 		messages = append(messages, diagnostic.Message)
 	}
 	joined := strings.Join(messages, "\n")
-	for _, want := range []string{"invalid IP", "duplicate domain"} {
+	for _, want := range []string{"malformed line", "duplicate domain"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("diagnostics do not contain %q: %s", want, joined)
 		}

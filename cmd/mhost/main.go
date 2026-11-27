@@ -1,30 +1,48 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 
 	"github.com/egoist/mygo"
+	"github.com/igevin/mHost-go/internal/app/alphaboot"
 	"github.com/igevin/mHost-go/internal/app/demo"
 	"github.com/igevin/mHost-go/internal/desktop"
 	"github.com/igevin/mHost-go/internal/storage"
 )
 
-// mHost Phase 1 主入口：Storage Workbench + 真实存储服务。
-// 设置 MHOST_WORKBENCH=hosts 可启动 Phase 2 的 Hosts 改写演示
-// （内存 Demo 服务，不写 /etc/hosts）。
+// mHost Alpha 主入口：默认启动 Hosts-only Alpha（真实 HostsService，
+// 数据目录自动 v1→v2 迁移）。
+// 环境变量切换：
+//   - MHOST_WORKBENCH=storage：Storage Workbench（迁移/验证工具台）
+//   - MHOST_WORKBENCH=hosts：Hosts Rewrite Workbench（内存 Demo，不写 /etc/hosts）
+//   - MHOST_DATA_DIR / MHOST_HOSTS_PATH：覆盖数据目录与系统 hosts 路径（测试/开发）
 func main() {
 	mygo.App.SetName("mHost")
-	mygo.App.SetVersion("0.1.0")
+	mygo.App.SetVersion("0.3.0-alpha")
 
 	var model desktop.AppModel
-	if os.Getenv("MHOST_WORKBENCH") == "hosts" {
+	switch os.Getenv("MHOST_WORKBENCH") {
+	case "storage":
+		model = desktop.NewWorkbenchModel(storage.NewService(), &desktop.NativeDirectoryPicker{})
+	case "hosts":
 		hosts := desktop.NewHostsWorkbenchModel(demo.NewHostsService())
 		hosts.DemoMode = true
 		model = hosts
-	} else {
-		workbench := desktop.NewWorkbenchModel(storage.NewService(), &desktop.NativeDirectoryPicker{})
-		model = workbench
+	default:
+		boot, err := alphaboot.Prepare(context.Background(), alphaboot.Options{
+			DataDir:   os.Getenv("MHOST_DATA_DIR"),
+			HostsPath: os.Getenv("MHOST_HOSTS_PATH"),
+		})
+		if err != nil {
+			// 启动失败给用户可见窗口（GUI 下 stderr 不可见），
+			// 不直接 log.Fatal（review 建议项）。
+			log.Printf("mHost Alpha startup: %v", err)
+			model = desktop.NewStartupErrorModel(err)
+			break
+		}
+		model = desktop.NewAlphaModel(boot)
 	}
 
 	if err := desktop.NewApp(model).Run(); err != nil {

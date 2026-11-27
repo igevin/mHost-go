@@ -43,6 +43,7 @@ type HostsService interface {
 type HostsProfile struct {
 	ID        string
 	Name      string
+	Enabled   bool
 	Protected bool
 	RuleCount int
 	Revision  uint64
