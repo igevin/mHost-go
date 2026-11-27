@@ -242,3 +242,87 @@ func TestRestoreFailureNotMarkedRestored(t *testing.T) {
 		t.Fatalf("failed restore must not be marked restored: %+v", result)
 	}
 }
+
+// 快照索引更新失败必须对用户可见：结果标记 WriteFailed 且服务返回错误，
+// 不得显示全局成功而留下永不显示的孤儿快照。
+func TestSnapshotIndexFailureIsVisible(t *testing.T) {
+	volume := NewFaultyVolume(NewOSVolume(), Faults{
+		FailAtomicWrite: func(path string) bool {
+			return strings.HasSuffix(path, filepath.Join("snapshots", "index.json"))
+		},
+	})
+	service := newTestService(t, WithVolume(volume))
+	workspace := inspectAndCopy(t, service, copyFixture(t, "v2-full"))
+
+	preview, err := service.PreviewValidationChange(context.Background(), workspace.ID)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	receipt, err := service.SaveValidationChange(context.Background(), workspace.ID, preview.ID)
+	if err == nil {
+		t.Fatal("index update failure must surface as an error")
+	}
+	found := false
+	for _, result := range receipt.Results {
+		if result.Entity == "snapshot" {
+			found = true
+			if result.Status != app.WriteFailed || result.Issue == nil {
+				t.Fatalf("snapshot result must be failed with issue: %+v", result)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no snapshot result in %+v", receipt.Results)
+	}
+}
+
+// profile 迁移失败时工作副本必须保持 v1 且可续做：重试时已完成项
+// 按 unchanged 跳过，最终完整迁移成功。
+func TestMigrationFailureLeavesV1AndIsResumable(t *testing.T) {
+	count := 0
+	volume := NewFaultyVolume(NewOSVolume(), Faults{
+		FailAtomicWrite: func(path string) bool {
+			if strings.Contains(path, string(filepath.Join("profiles", "hosts"))) {
+				count++
+				return count == 1
+			}
+			return false
+		},
+	})
+	service := newTestService(t, WithVolume(volume))
+	workspace := inspectAndCopy(t, service, copyFixture(t, "v1-hosts"))
+
+	plan, err := service.PreviewMigration(context.Background(), workspace.ID)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if _, err := service.ApplyMigration(context.Background(), workspace.ID, plan.ID); err == nil {
+		t.Fatal("expected profile write failure")
+	}
+	// 副本仍是 v1，迁移入口保留。
+	updated, err := service.Refresh(context.Background(), workspace.ID)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if updated.StorageVersion != 1 {
+		t.Fatalf("version = %d, want 1 for resumability", updated.StorageVersion)
+	}
+	// 重试：preview 重新生成（revision 已变，旧 plan 作废）。
+	plan, err = service.PreviewMigration(context.Background(), workspace.ID)
+	if err != nil {
+		t.Fatalf("re-preview: %v", err)
+	}
+	receipt, err := service.ApplyMigration(context.Background(), workspace.ID, plan.ID)
+	if err != nil {
+		t.Fatalf("re-apply: %v", err)
+	}
+	for _, result := range receipt.Results {
+		if result.Status == app.WriteFailed {
+			t.Fatalf("retry left failed result: %+v", result)
+		}
+	}
+	scan, err := service.store.Scan(workspace.Root)
+	if err != nil || scan.Version != 2 {
+		t.Fatalf("rescan: %v version %d", err, scan.Version)
+	}
+}

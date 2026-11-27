@@ -265,26 +265,40 @@ func (s *Service) ApplyMigration(ctx context.Context, workspaceID, planID string
 	results := []app.WriteResult{}
 	firstFailure := (*app.UIError)(nil)
 
-	manifest, err := s.readManifestForWrite(root)
-	if err != nil {
-		return app.WriteReceipt{}, err
-	}
-	target := Manifest{
-		Version:     2,
-		AppVersion:  manifest.AppVersion,
-		UpdatedAt:   s.now().UTC(),
-		DNSEnabled:  boolPtr(false),
-		OriginalDNS: &OriginalDNS{Kind: OriginalDNSDHCPEmpty},
-	}
-	result := s.writeEntity(root, FileManifest, "manifest", operationID, target)
-	results = append(results, result)
-	firstFailure = firstFailureOr(firstFailure, result)
-
+	// 先迁移 profile，最后写 manifest（版本升级标志）：任何 profile
+	// 失败都跳过 manifest 写入，副本保持 v1，迁移入口保留；重试时已
+	// 完成的项按 unchanged 跳过。
+	profileFailures := 0
 	for _, change := range plan.Changes {
 		if change.Entity != "profile" {
 			continue
 		}
 		result := s.roundTripProfile(root, change.Path, operationID)
+		results = append(results, result)
+		firstFailure = firstFailureOr(firstFailure, result)
+		if result.Status == app.WriteFailed {
+			profileFailures++
+		}
+	}
+	manifest, err := s.readManifestForWrite(root)
+	if err != nil {
+		return app.WriteReceipt{}, err
+	}
+	if profileFailures > 0 {
+		results = append(results, app.WriteResult{
+			Entity: "manifest", Path: FileManifest, Status: app.WriteSkipped, Preservation: app.PreservePreserved,
+			Issue: &app.StorageIssue{Code: "skipped_dependency_failed", Severity: app.SeverityWarning, Path: FileManifest,
+				Message: "Manifest upgrade skipped because profiles failed; the working copy stays v1 so migration can be retried", Recoverable: true},
+		})
+	} else {
+		target := Manifest{
+			Version:     2,
+			AppVersion:  manifest.AppVersion,
+			UpdatedAt:   s.now().UTC(),
+			DNSEnabled:  boolPtr(false),
+			OriginalDNS: &OriginalDNS{Kind: OriginalDNSDHCPEmpty},
+		}
+		result := s.writeEntity(root, FileManifest, "manifest", operationID, target)
 		results = append(results, result)
 		firstFailure = firstFailureOr(firstFailure, result)
 	}
@@ -583,7 +597,9 @@ func (s *Service) createValidationSnapshot(root, operationID string) app.WriteRe
 	index.Snapshots = append(index.Snapshots, SnapshotMeta{ID: id, Name: snapshot.Name, ProfileCount: len(profiles), CreatedAt: snapshot.CreatedAt})
 	indexResult := s.writeContent(root, FileSnapshotIndex, "snapshot_index", operationID, mustMarshal(index))
 	if indexResult.Status == app.WriteFailed {
-		return app.WriteResult{Entity: "snapshot", Path: rel, Status: app.WriteWritten, ReadbackVerified: true,
+		// 索引登记失败必须对用户可见：快照文件虽在，但没有索引它永远不会
+		// 出现在 UI 里；按失败上报，禁止显示全局成功。
+		return app.WriteResult{Entity: "snapshot", Path: rel, Status: app.WriteFailed, ReadbackVerified: true,
 			Issue: &app.StorageIssue{Code: "index_update_failed", Severity: app.SeverityError, Path: FileSnapshotIndex, Message: "Snapshot written but index update failed", Detail: "snapshot is pending until the index is rebuilt", Recoverable: true}}
 	}
 	return result

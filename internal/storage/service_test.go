@@ -382,19 +382,24 @@ func TestWriteFailureInjectionKeepsOriginalAndReportsPartial(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected partial failure error")
 	}
-	var failed, written int
-	for _, result := range receipt.Results {
+	var failed, skipped int
+	var manifestResult *app.WriteResult
+	for i := range receipt.Results {
+		result := receipt.Results[i]
 		switch result.Status {
 		case app.WriteFailed:
 			failed++
 			if result.Issue == nil {
 				t.Fatalf("failed result without issue: %+v", result)
 			}
-		case app.WriteWritten:
-			written++
+		case app.WriteSkipped:
+			skipped++
+			if result.Entity == "manifest" {
+				manifestResult = &receipt.Results[i]
+			}
 		}
 	}
-	if failed == 0 || written == 0 {
+	if failed == 0 || skipped == 0 || manifestResult == nil {
 		t.Fatalf("receipt = %+v", receipt.Results)
 	}
 	// profile 原文件未被破坏（内容为 fixture 原样）。
@@ -410,7 +415,7 @@ func TestWriteFailureInjectionKeepsOriginalAndReportsPartial(t *testing.T) {
 func TestBackupFailureAbortsTargetWrite(t *testing.T) {
 	volume := NewFaultyVolume(NewOSVolume(), Faults{
 		FailCopy: func(dst, _ string) bool {
-			// manifest 是迁移时第一个备份的实体。
+			// profile 先于 manifest 处理，其备份复制最先命中故障。
 			return strings.Contains(dst, DirBackups)
 		},
 	})
@@ -425,12 +430,24 @@ func TestBackupFailureAbortsTargetWrite(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected backup failure error")
 	}
+	// 备份故障先作用于第一个被处理的实体（profile）；manifest 因
+	// 依赖失败被跳过，副本保持 v1。
+	var profileFailed bool
+	var manifestSkipped bool
 	for _, result := range receipt.Results {
-		if result.Entity == "manifest" {
-			if result.Status != app.WriteFailed || result.Issue == nil || result.Issue.Code != CodeBackupFailed {
-				t.Fatalf("manifest result = %+v", result)
+		switch result.Entity {
+		case "profile":
+			if result.Status == app.WriteFailed && result.Issue != nil && result.Issue.Code == CodeBackupFailed {
+				profileFailed = true
+			}
+		case "manifest":
+			if result.Status == app.WriteSkipped {
+				manifestSkipped = true
 			}
 		}
+	}
+	if !profileFailed || !manifestSkipped {
+		t.Fatalf("receipt = %+v", receipt.Results)
 	}
 	// manifest 原文件未被覆盖。
 	scan, err := service.store.Scan(workspace.Root)
