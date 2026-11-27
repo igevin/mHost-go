@@ -3,6 +3,7 @@ package desktop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -358,4 +359,23 @@ func TestWorkbenchExportAndImportRoundTrip(t *testing.T) {
 	if len(model.Profiles) != 2 {
 		t.Fatalf("profiles = %+v", model.Profiles)
 	}
+}
+
+func TestStartupErrorModel(t *testing.T) {
+	model := NewStartupErrorModel(errors.New("manifest corrupted"))
+	if model.Title() == "" {
+		t.Fatal("title missing")
+	}
+	if !model.RequestQuit() {
+		t.Fatal("startup error should allow quit")
+	}
+	if err := model.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	quit := false
+	model.SetOnSafeToQuit(func() { quit = true })
+	if model.onQuit == nil {
+		t.Fatal("onQuit not wired")
+	}
+	_ = quit
 }

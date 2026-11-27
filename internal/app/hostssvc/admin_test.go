@@ -3,6 +3,7 @@ package hostssvc
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	app "github.com/igevin/mHost-go/internal/app"
@@ -137,5 +138,43 @@ func TestDeleteProtectedProfileRefused(t *testing.T) {
 	profiles, _ := env.service.ListProfiles(context.Background())
 	if len(profiles) != 1 {
 		t.Fatal("protected profile was deleted")
+	}
+}
+
+func TestDeleteAppliedProfileRefused(t *testing.T) {
+	profile := testProfile("11111111-1111-4111-8111-111111111111", "env", "127.0.0.1 a.com\n")
+	env := newTestEnv(t, "127.0.0.1 keep.me\n", profile)
+
+	plan, err := env.service.PreviewApply(context.Background(), profile.ID, nil)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if _, err := env.service.Apply(context.Background(), plan.ID, nil); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	err = env.service.DeleteProfile(context.Background(), profile.ID)
+	var uiErr *app.UIError
+	if !errors.As(err, &uiErr) || uiErr.Kind != app.ErrorValidation {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+	if !strings.Contains(uiErr.Message, "applied") {
+		t.Fatalf("reason should mention applied: %+v", uiErr)
+	}
+	profiles, _ := env.service.ListProfiles(context.Background())
+	if len(profiles) != 1 {
+		t.Fatal("applied profile was deleted")
+	}
+
+	// 回滚后允许删除
+	backups, _ := env.service.ListApplyBackups(context.Background())
+	if len(backups) == 0 {
+		t.Fatal("no backups")
+	}
+	if _, err := env.service.Rollback(context.Background(), backups[0].ID); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if err := env.service.DeleteProfile(context.Background(), profile.ID); err != nil {
+		t.Fatalf("delete after rollback: %v", err)
 	}
 }

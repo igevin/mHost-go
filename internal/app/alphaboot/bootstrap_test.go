@@ -83,6 +83,15 @@ func TestPrepareMigratesV1Data(t *testing.T) {
 		t.Fatal("expected migrated hosts profiles")
 	}
 
+	// 迁移后立刻 Apply：apply 备份目录与存储层 backups/ 不冲突（索引格式不同）
+	plan, err := result.Service.PreviewApply(context.Background(), profiles[0].ID, nil)
+	if err != nil {
+		t.Fatalf("preview after migration: %v", err)
+	}
+	if _, err := result.Service.Apply(context.Background(), plan.ID, nil); err != nil {
+		t.Fatalf("apply after migration: %v", err)
+	}
+
 	// 数据目录已升级 v2
 	manifest, err := os.ReadFile(filepath.Join(dataDir, storage.FileManifest))
 	if err != nil {
