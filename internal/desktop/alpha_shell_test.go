@@ -379,3 +379,29 @@ func TestStartupErrorModel(t *testing.T) {
 	}
 	_ = quit
 }
+
+func TestToggleEnabledKeepsDraftRevisionSaveable(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	model := newAdminWorkbench(t, svc)
+	model.Load()
+	model.SelectProfile(model.Profiles[0].ID)
+
+	// 启停（刷新存储修订号）后必须仍能编辑并保存当前草稿
+	model.ToggleSelectedEnabled()
+	if model.Problem != nil {
+		t.Fatalf("toggle problem = %+v", model.Problem)
+	}
+	model.Editor.Select(0, 0)
+	model.Editor.Insert("# note\n")
+	model.SyncFromEditor()
+	if !model.Modified() {
+		t.Fatal("draft not modified")
+	}
+	model.Save()
+	if model.Problem != nil {
+		t.Fatalf("save after toggle = %+v", model.Problem)
+	}
+	if model.Modified() {
+		t.Fatal("draft still modified after save")
+	}
+}
