@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "snapshots": [
+    {
+      "id": "4fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "name": "Before cleanup",
+      "description": "v1 snapshot fixture",
+      "profile_count": 2,
+      "created_at": "2024-03-01T12:00:00Z"
+    }
+  ]
+}

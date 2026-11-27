@@ -1,0 +1,23 @@
+{
+  "enabled": false,
+  "sources": [
+    {
+      "source_id": "66666666-6666-4666-8666-666666666666",
+      "name": "Legacy blocklist",
+      "url": "https://example.invalid/list.txt",
+      "enabled": false,
+      "response": "zero_address",
+      "format": "hosts",
+      "last_fetched_at": null,
+      "last_error": "fetch timed out",
+      "rule_count": 1200,
+      "etag": null,
+      "rules_limit_override": null,
+      "last_refresh_duration_ms": 900,
+      "last_refresh_failed_at": "2024-02-15T09:00:00Z"
+    }
+  ],
+  "whitelist": ["allowed.legacy.test", "mail.legacy.test"],
+  "auto_refresh_enabled": false,
+  "refresh_interval_hours": 24
+}

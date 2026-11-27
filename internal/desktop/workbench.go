@@ -79,6 +79,9 @@ func NewWorkbenchModel(service app.StorageService, picker app.DirectoryPicker) *
 	}
 }
 
+// Title 是窗口与托盘标题。
+func (m *WorkbenchModel) Title() string { return "mHost Phase 1 · Storage Workbench" }
+
 // SetDispatch, SetOnSafeToQuit and SetProblem wire the model into App; they
 // satisfy desktop.AppModel together with View/RequestQuit/CancelQuit/Close.
 func (m *WorkbenchModel) SetDispatch(fn func(func()))     { m.Dispatch = fn }

@@ -4,7 +4,7 @@
 
 本项目计划使用 Go 和 [MyGo](https://github.com/egoist/mygo) 构建原生桌面应用。在延续源项目核心功能、数据兼容要求和安全边界的同时，重新设计视觉、信息架构与交互，不复刻旧版中不合理的 UI 和操作逻辑。
 
-> **当前状态：Phase 2 Hosts 改写交互验证。** 当前应用是可运行的 Hosts Rewrite Workbench：单一可编辑表面、行内诊断、staged 内嵌预览、常驻回执与回滚，全部由内存演示服务驱动，不读写真实 `/etc/hosts`。#4 将按同一服务契约实现真实 Hosts 核心。仓库仍不提供完整产品功能或正式安装包。
+> **当前状态：Phase 1 存储兼容落地。** 当前主入口是 Storage Workbench + 真实磁盘存储服务（`internal/storage`）：只读检查源目录、独立工作副本、v1→v2 迁移、验证变更、备份与恢复，全部写入均为原子操作并带读回验证。设置 `MHOST_WORKBENCH=hosts` 可启动 Phase 2 的 Hosts Rewrite Workbench（内存演示服务，不读写真实 `/etc/hosts`）。仓库仍不提供完整产品功能或正式安装包。
 
 ## 项目方向
 
@@ -27,16 +27,23 @@
 - [Storage Workbench UI 与服务契约](docs/phase-1/storage-ui-design.md)
 - [Hosts 改写 Workbench UI 与服务契约](docs/phase-2/hosts-rewrite-ui-design.md)
 
-## 当前阶段：Phase 2
+## 当前阶段：Phase 1
 
-Phase 2 的 UI 部分由 #16 交付：MyGo Hosts Rewrite Workbench、行内诊断、Save/Apply 显式分离、staged 预览、常驻回执、回滚、草稿保护与 UI 测试，全部基于内存 Demo Service（`internal/app/demo.HostsService`），不碰真实 `/etc/hosts`。
+Phase 1 由 #13（UI 与契约）和 #14（真实存储）共同交付：主入口 `cmd/mhost` 启动 Storage Workbench，接入 `internal/storage.Service` 真实磁盘实现。源目录始终只读；迁移、验证写入、备份恢复只发生在独立工作副本。所有持久化写入均为「先备份 → 临时文件原子替换 → 读回验证」，目录 0700、文件 0600；测试全部使用隔离临时目录。
+
+- 存储实现与迁移策略见 [Phase 1 存储实现](docs/phase-1/storage-implementation.md)。
+- 真实服务驱动的 UI 契约测试见 `internal/desktop/workbench_real_test.go`；新旧解析差分对照见 `internal/storage/compatibility_test.go`。
+
+## 下一阶段：Phase 2
+
+Phase 2 的 UI 部分由 #16 交付：MyGo Hosts Rewrite Workbench、行内诊断、Save/Apply 显式分离、staged 预览、常驻回执、回滚、草稿保护与 UI 测试，全部基于内存 Demo Service（`internal/app/demo.HostsService`），不碰真实 `/etc/hosts`；通过 `MHOST_WORKBENCH=hosts` 启动。
 
 后续交付：
 
 1. #4 按 `internal/app.HostsService` 契约实现真实 parser、managed block 合并/冲突、原子写、备份、读回验证与回滚。
 2. #5 将已验证的交互产品化（正式布局、Profile CRUD、真实服务接入、安装包）。
 
-Phase 1 的 Storage Workbench 代码保留在树中并由测试覆盖，但主入口不再启动它；#14 落地后由正式存储替换其 Demo Service。Phase 0 已完成技术验证和行为基线，报告见 [Phase 0 报告](docs/phase-0/report.md)。当前主入口不启动 DNS 原型，也不修改系统 DNS。
+Phase 0 已完成技术验证和行为基线，报告见 [Phase 0 报告](docs/phase-0/report.md)。当前主入口不启动 DNS 原型，也不修改系统 DNS。
 
 ## 技术基线
 
@@ -93,13 +100,13 @@ xattr -dr com.apple.quarantine "/path/to/mHost Phase 2.app"
 
 ad-hoc 签名不代表通过 Apple 公证，Gatekeeper 提示属于预期行为，不以 `spctl` 通过作为验收条件。
 
-当前 Workbench 由内存演示服务驱动：改写流程、冲突、失败与回滚全部发生在内存中，不会写入 `/etc/hosts`。手动验证步骤见 [Hosts Rewrite Workbench 验证计划](docs/phase-2/hosts-rewrite-ui-validation.md)；Storage Workbench 的历史验证记录见 [Storage Workbench 验证计划](docs/phase-1/storage-ui-validation.md)。Phase 0 的历史验证记录仍保留在 [Phase 0 报告](docs/phase-0/report.md)。
+当前有两个可验证的 Workbench：默认主入口 Storage Workbench 使用真实磁盘服务（只读源检查、工作副本迁移、备份恢复），手动验证步骤见 [Storage Workbench 验证计划](docs/phase-1/storage-ui-validation.md)；`MHOST_WORKBENCH=hosts` 启动的 Hosts Rewrite Workbench 由内存演示服务驱动，改写流程、冲突、失败与回滚全部发生在内存中，不会写入 `/etc/hosts`，验证步骤见 [Hosts Rewrite Workbench 验证计划](docs/phase-2/hosts-rewrite-ui-validation.md)。Phase 0 的历史验证记录仍保留在 [Phase 0 报告](docs/phase-0/report.md)。
 
 ## 安全边界
 
-- 当前 Phase 2 Demo Service 只保存内存状态，不读取或写入真实 `/etc/hosts`；真实 Hosts 核心安全语义由 #4 实现并在受控环境验证。
-- Phase 2 主入口不启动 DNS server/proxy，不请求 DNS 提权，不修改系统 DNS。
-- Phase 1 Demo Service 只保存内存状态，不读取或写入用户选择的目录；真实存储安全语义由 #14 实现并通过隔离 fixture 验证。
+- 当前主入口（Storage Workbench）只读取用户显式选择的目录；所有写入发生在独立工作副本，且均为先备份、原子替换、读回验证；测试只写隔离临时目录。
+- Phase 2 Hosts Demo Service 只保存内存状态，不读取或写入真实 `/etc/hosts`；真实 Hosts 核心安全语义由 #4 实现并在受控环境验证。
+- 当前主入口不启动 DNS server/proxy，不请求 DNS 提权，不修改系统 DNS。
 - Phase 0 不写真实用户目录，不执行正式数据迁移，不修改生产 `/etc/hosts`。
 - DNS 原型仅在专用 macOS 测试环境修改系统 DNS；GitHub Actions 不执行真实提权或系统 DNS 修改。
 - 修改 DNS 前必须持久化原始状态和恢复标记，恢复并验证成功后才能删除标记。
