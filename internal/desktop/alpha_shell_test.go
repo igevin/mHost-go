@@ -3,6 +3,7 @@ package desktop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -254,4 +255,24 @@ func TestAlphaModelBootBannerData(t *testing.T) {
 func newRealSvcOnly(t *testing.T) *hostssvc.Service {
 	svc, _ := newRealHostsService(t)
 	return svc
+}
+
+func TestStartupErrorModel(t *testing.T) {
+	model := NewStartupErrorModel(errors.New("manifest corrupted"))
+	if model.Title() == "" {
+		t.Fatal("title missing")
+	}
+	if !model.RequestQuit() {
+		t.Fatal("startup error should allow quit")
+	}
+	if err := model.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	quit := false
+	model.SetOnSafeToQuit(func() { quit = true })
+	// View 渲染由无窗口层覆盖；这里验证接线
+	if model.onQuit == nil {
+		t.Fatal("onQuit not wired")
+	}
+	_ = quit
 }

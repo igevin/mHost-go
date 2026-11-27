@@ -102,7 +102,10 @@ func Prepare(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	volume := storage.NewOSVolume()
-	hostsService := hostssvc.New(dataDir, hostsPath, filepath.Join(dataDir, "backups"), volume)
+	// apply 备份目录必须与存储层 backups/ 分开：两者 index.json 格式不同
+	//（数组 vs 对象），共用会让迁移后的首次 Apply 因索引解析失败而整体
+	// 不可用（review 必须修复项）。
+	hostsService := hostssvc.New(dataDir, hostsPath, filepath.Join(dataDir, "apply-backups"), volume)
 
 	profiles, err := hostsService.ListProfiles(ctx)
 	if err != nil {

@@ -115,13 +115,19 @@ func (m *HostsWorkbenchModel) hostsEmptyView(c *ui.Context) {
 		}
 		if m.Phase == HostsPhaseLoading {
 			ui.Spinner(c)
-			ui.Text(c, "Loading demo profiles…").FontSize(18).Bold()
-		} else {
+			ui.Text(c, "Loading profiles…").FontSize(18).Bold()
+		} else if m.DemoMode {
 			ui.Text(c, "Hosts rewrite workbench").FontSize(24).Bold()
 			ui.Text(c, "No profile is loaded until you start the demo.").TextColor(theme.TextMuted)
 			ui.Text(c, "Nothing touches /etc/hosts; the managed block is simulated in memory.").FontSize(12).TextColor(theme.TextMuted)
 			if ui.PrimaryButton(c, "Load Demo Profiles").Disabled(m.busy()).Clicked() {
 				m.Load()
+			}
+		} else {
+			ui.Text(c, "No profiles").FontSize(24).Bold()
+			ui.Text(c, "Create one with ＋ New in the sidebar.").TextColor(theme.TextMuted)
+			if m.Admin != nil && ui.PrimaryButton(c, "＋ New Profile").Disabled(m.busy()).Clicked() {
+				m.CreateNewProfile()
 			}
 		}
 	})

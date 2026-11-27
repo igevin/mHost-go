@@ -36,7 +36,11 @@ func main() {
 			HostsPath: os.Getenv("MHOST_HOSTS_PATH"),
 		})
 		if err != nil {
-			log.Fatalf("mHost Alpha startup: %v", err)
+			// 启动失败给用户可见窗口（GUI 下 stderr 不可见），
+			// 不直接 log.Fatal（review 建议项）。
+			log.Printf("mHost Alpha startup: %v", err)
+			model = desktop.NewStartupErrorModel(err)
+			break
 		}
 		model = desktop.NewAlphaModel(boot)
 	}

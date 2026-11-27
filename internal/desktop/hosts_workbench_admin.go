@@ -77,11 +77,13 @@ func (m *HostsWorkbenchModel) CreateNewProfile() {
 			return
 		}
 		m.dispatch(func() {
-			if !m.current(id) {
-				return
+			if m.current(id) {
+				m.Phase = HostsPhaseIdle
 			}
-			m.refreshAfterAdminChange(id, ctx, detail.ID)
 		})
+		// 列表刷新留在 worker 侧执行（service I/O 不进 Dispatch；
+		// review 建议项），合并回主线程时 operation id 仍有效。
+		m.refreshAfterAdminChange(id, ctx, detail.ID)
 	})
 }
 
@@ -100,11 +102,13 @@ func (m *HostsWorkbenchModel) DuplicateSelected() {
 			return
 		}
 		m.dispatch(func() {
-			if !m.current(id) {
-				return
+			if m.current(id) {
+				m.Phase = HostsPhaseIdle
 			}
-			m.refreshAfterAdminChange(id, ctx, detail.ID)
 		})
+		// 列表刷新留在 worker 侧执行（service I/O 不进 Dispatch；
+		// review 建议项），合并回主线程时 operation id 仍有效。
+		m.refreshAfterAdminChange(id, ctx, detail.ID)
 	})
 }
 
@@ -125,12 +129,7 @@ func (m *HostsWorkbenchModel) ToggleSelectedEnabled() {
 			m.dispatchError(id, "set_enabled", err)
 			return
 		}
-		m.dispatch(func() {
-			if !m.current(id) {
-				return
-			}
-			m.refreshProfiles(id, ctx)
-		})
+		m.refreshProfiles(id, ctx)
 	})
 }
 
@@ -173,16 +172,23 @@ func (m *HostsWorkbenchModel) ConfirmDelete() {
 			if m.SelectedID == profileID {
 				m.SelectedID = ""
 			}
-			m.refreshAfterAdminChange(id, ctx, "")
 		})
+		m.refreshAfterAdminChange(id, ctx, "")
 	})
 }
 
 // refreshAfterAdminChange 刷新列表；selectID 非空时选中该项。
+// 调用方须在 worker 侧执行（ListProfiles I/O 不得跑在 Dispatch 里）。
 func (m *HostsWorkbenchModel) refreshAfterAdminChange(id uint64, ctx context.Context, selectID string) {
 	m.refreshProfiles(id, ctx)
 	if selectID != "" {
-		m.switchToProfile(selectID)
+		// 选中走新一轮操作：等刷新合并 dispatch 入队后再开始，
+		// 保证两个 dispatch 按序执行且刷新的 operation 判活有效。
+		m.dispatch(func() {
+			if m.current(id) {
+				m.switchToProfile(selectID)
+			}
+		})
 	}
 }
 

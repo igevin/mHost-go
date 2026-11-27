@@ -131,7 +131,9 @@ func (s *Service) SetProfileEnabled(ctx context.Context, profileID string, enabl
 	}, nil
 }
 
-// DeleteProfile 删除 profile。受保护 profile 拒绝（ErrorValidation）。
+// DeleteProfile 删除 profile。受保护 profile 拒绝（ErrorValidation）；
+// 当前正被应用的 profile 也拒绝——删除会让系统 hosts 里的管理块
+// 失去归属而无提示（review 建议项），须先 Rollback 或应用其他 profile。
 func (s *Service) DeleteProfile(ctx context.Context, profileID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -142,6 +144,12 @@ func (s *Service) DeleteProfile(ctx context.Context, profileID string) error {
 	}
 	if profile.Protected {
 		return &app.UIError{Kind: app.ErrorValidation, Message: fmt.Sprintf("Profile %q is protected and cannot be deleted", profile.Name)}
+	}
+	if state, serr := s.readAppliedState(); serr == nil && state.ProfileID == profileID {
+		return &app.UIError{
+			Kind:    app.ErrorValidation,
+			Message: fmt.Sprintf("Profile %q is currently applied; roll back or apply another profile before deleting it", profile.Name),
+		}
 	}
 	if err := s.volume.Remove(filepath.Join(s.profilesDir(), profile.ID+".json")); err != nil {
 		return fmt.Errorf("delete profile %s: %w", profile.ID, err)
