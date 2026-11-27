@@ -125,10 +125,22 @@ func (m *HostsWorkbenchModel) ToggleSelectedEnabled() {
 	m.Problem = nil
 	profileID, enabled := profile.ID, !profile.Enabled
 	m.runAsync(func() {
-		if _, err := m.Admin.SetProfileEnabled(ctx, profileID, enabled); err != nil {
+		detail, err := m.Admin.SetProfileEnabled(ctx, profileID, enabled)
+		if err != nil {
 			m.dispatchError(id, "set_enabled", err)
 			return
 		}
+		m.dispatch(func() {
+			if !m.current(id) {
+				return
+			}
+			// 启停会刷新 UpdatedAt（即修订号）：同步当前草稿的 revision，
+			// 否则此后 Save 的 baseRevision 校验必然失败、草稿永远存不下
+			// （review 建议项）。
+			if draft := m.drafts[profileID]; draft != nil {
+				draft.revision = detail.Revision
+			}
+		})
 		m.refreshProfiles(id, ctx)
 	})
 }
