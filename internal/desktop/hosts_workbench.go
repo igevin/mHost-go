@@ -84,6 +84,9 @@ func NewHostsWorkbenchModel(service app.HostsService) *HostsWorkbenchModel {
 	}
 }
 
+// Title 是窗口与托盘标题。
+func (m *HostsWorkbenchModel) Title() string { return "mHost Phase 2 · Hosts Rewrite Workbench" }
+
 // SetDispatch, SetOnSafeToQuit and SetProblem wire the model into App; they
 // satisfy desktop.AppModel together with View/RequestQuit/CancelQuit/Close.
 func (m *HostsWorkbenchModel) SetDispatch(fn func(func()))     { m.Dispatch = fn }

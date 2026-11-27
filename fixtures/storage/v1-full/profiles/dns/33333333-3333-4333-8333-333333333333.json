@@ -1,0 +1,19 @@
+{
+  "id": "33333333-3333-4333-8333-333333333333",
+  "name": "Legacy DNS",
+  "description": null,
+  "enabled": true,
+  "protected": true,
+  "tags": ["network"],
+  "rules": [
+    {
+      "id": "43333333-3333-4333-8333-333333333333",
+      "ip": "192.168.1.53",
+      "domains": ["home.lan"],
+      "enabled": true,
+      "source": {"type": "Manual"}
+    }
+  ],
+  "created_at": "2024-02-01T00:00:00Z",
+  "updated_at": "2024-02-01T00:00:00Z"
+}

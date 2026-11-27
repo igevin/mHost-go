@@ -21,6 +21,11 @@ type AppModel interface {
 	SetProblem(*app.UIError)
 }
 
+// TitledModel 可选提供窗口标题；App 用它设置窗口与托盘文案。
+type TitledModel interface {
+	Title() string
+}
+
 type App struct {
 	Model  AppModel
 	window *mygo.Window
@@ -118,8 +123,12 @@ func (a *App) shouldHideOnClose() bool {
 }
 
 func (a *App) ready() {
+	title := "mHost"
+	if titled, ok := a.Model.(TitledModel); ok {
+		title = titled.Title()
+	}
 	a.window = mygo.NewWindow(mygo.WindowOptions{
-		Title:   "mHost Phase 2 · Hosts Rewrite Workbench",
+		Title:   title,
 		Width:   1120,
 		Height:  760,
 		Content: ui.View(a.Model.View),
@@ -140,7 +149,7 @@ func (a *App) ready() {
 	tray, err := mygo.NewTray(mygo.TrayOptions{
 		Icon:           trayIcon(),
 		IconIsTemplate: true,
-		ToolTip:        "mHost Phase 2",
+		ToolTip:        title,
 		Menu: mygo.NewMenu([]*mygo.MenuItem{
 			{Label: "Open mHost", Click: func(*mygo.MenuItem, *mygo.Window) { a.showWindow() }},
 			mygo.Separator(),
