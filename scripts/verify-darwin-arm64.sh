@@ -3,7 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 output="$root/build/darwin-arm64"
-app="$output/mHost Phase 1.app"
+app="$output/mHost Phase 2.app"
 proxy="$app/Contents/Resources/bin/mhost-dns-proxy"
 
 test "$(uname -s)" = "Darwin"

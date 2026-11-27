@@ -6,10 +6,23 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	app "github.com/igevin/mHost-go/internal/app"
 )
 
+// AppModel is what App requires of a workbench model. Both the storage
+// workbench and the hosts rewrite workbench satisfy it.
+type AppModel interface {
+	View(c *ui.Context)
+	RequestQuit() bool
+	CancelQuit()
+	Close() error
+	SetDispatch(func(func()))
+	SetOnSafeToQuit(func())
+	SetProblem(*app.UIError)
+}
+
 type App struct {
-	Model  *WorkbenchModel
+	Model  AppModel
 	window *mygo.Window
 	tray   *mygo.Tray
 
@@ -21,7 +34,7 @@ type App struct {
 	cleanupErr     error
 }
 
-func NewApp(model *WorkbenchModel) *App {
+func NewApp(model AppModel) *App {
 	return &App{Model: model}
 }
 
@@ -104,7 +117,7 @@ func (a *App) shouldHideOnClose() bool {
 
 func (a *App) ready() {
 	a.window = mygo.NewWindow(mygo.WindowOptions{
-		Title:   "mHost Phase 1 · Storage Workbench",
+		Title:   "mHost Phase 2 · Hosts Rewrite Workbench",
 		Width:   1120,
 		Height:  760,
 		Content: ui.View(a.Model.View),
@@ -115,15 +128,17 @@ func (a *App) ready() {
 			a.window.Hide()
 		}
 	})
-	a.Model.Dispatch = a.window.Update
-	a.Model.OnSafeToQuit = a.finishQuit
-	if picker, ok := a.Model.Picker.(interface{ SetParent(*mygo.Window) }); ok {
-		picker.SetParent(a.window)
+	a.Model.SetDispatch(a.window.Update)
+	a.Model.SetOnSafeToQuit(a.finishQuit)
+	if pickerModel, ok := a.Model.(interface{ DirectoryPicker() app.DirectoryPicker }); ok {
+		if picker, ok := pickerModel.DirectoryPicker().(interface{ SetParent(*mygo.Window) }); ok {
+			picker.SetParent(a.window)
+		}
 	}
 	tray, err := mygo.NewTray(mygo.TrayOptions{
 		Icon:           trayIcon(),
 		IconIsTemplate: true,
-		ToolTip:        "mHost Phase 1",
+		ToolTip:        "mHost Phase 2",
 		Menu: mygo.NewMenu([]*mygo.MenuItem{
 			{Label: "Open mHost", Click: func(*mygo.MenuItem, *mygo.Window) { a.showWindow() }},
 			mygo.Separator(),
@@ -131,7 +146,7 @@ func (a *App) ready() {
 		}),
 	})
 	if err != nil {
-		a.Model.Problem = classifyUIError("create_tray", err)
+		a.Model.SetProblem(classifyUIError("create_tray", err))
 		return
 	}
 	a.tray = tray

@@ -79,6 +79,15 @@ func NewWorkbenchModel(service app.StorageService, picker app.DirectoryPicker) *
 	}
 }
 
+// SetDispatch, SetOnSafeToQuit and SetProblem wire the model into App; they
+// satisfy desktop.AppModel together with View/RequestQuit/CancelQuit/Close.
+func (m *WorkbenchModel) SetDispatch(fn func(func()))     { m.Dispatch = fn }
+func (m *WorkbenchModel) SetOnSafeToQuit(fn func())       { m.OnSafeToQuit = fn }
+func (m *WorkbenchModel) SetProblem(problem *app.UIError) { m.Problem = problem }
+
+// DirectoryPicker exposes the picker for App to parent the native dialog.
+func (m *WorkbenchModel) DirectoryPicker() app.DirectoryPicker { return m.Picker }
+
 func (m *WorkbenchModel) OpenSource() {
 	if m.busy() || m.Service == nil || m.Picker == nil {
 		return

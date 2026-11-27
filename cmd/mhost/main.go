@@ -9,11 +9,10 @@ import (
 )
 
 func main() {
-	mygo.App.SetName("mHost Phase 1")
+	mygo.App.SetName("mHost Phase 2")
 	mygo.App.SetVersion("0.0.0")
-	service := demo.NewStorageService()
-	picker := &desktop.NativeDirectoryPicker{}
-	model := desktop.NewWorkbenchModel(service, picker)
+	service := demo.NewHostsService()
+	model := desktop.NewHostsWorkbenchModel(service)
 	model.DemoMode = true
 	if err := desktop.NewApp(model).Run(); err != nil {
 		log.Fatal(err)
