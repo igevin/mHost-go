@@ -347,6 +347,44 @@ func TestHostsWorkbenchProblemsPanelWithManyDiagnostics(t *testing.T) {
 	}
 }
 
+func TestHostsWorkbenchProblemsSplitGivesEditorTheMajorShare(t *testing.T) {
+	model := newTestHostsWorkbench(demo.NewHostsService())
+	loadAndSelect(t, model, "dev")
+	var lines strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&lines, "10.0.0.%d crowd.demo.test\n", i)
+	}
+	model.Editor.Select(0, 0)
+	model.Editor.Insert(lines.String())
+	model.SyncFromEditor()
+	tester := ui.NewTester(model.View, 1120, 760)
+	tester.Frame()
+	statusRect, ok := tester.Find("Cmd-F find · edits invalidate a staged preview")
+	if !ok {
+		t.Fatalf("editor status row missing: %q", tester.Texts())
+	}
+	problemsRect, ok := tester.Find("Problems (30)")
+	if !ok {
+		t.Fatalf("problems panel missing: %q", tester.Texts())
+	}
+	t.Logf("status y=%v problems y=%v", statusRect.Y, problemsRect.Y)
+	// SplitVerticalPercent takes the first pane's share of the room in
+	// percent (0-100), so ProblemsSplit=70 puts the editor on top with 70%
+	// and the problems panel in the bottom 30%. Lock that geometry: the
+	// problems title sits in the bottom third of the window, and the editor
+	// status row at the bottom of the top pane stays well above it. If the
+	// percentage were read as the second pane's share, or the range were
+	// 0-1, the divider would land near the top and the problems title would
+	// move up into the top half.
+	if problemsRect.Y < 760*0.6 {
+		t.Fatalf("problems panel top y=%v, want bottom third (split share semantics changed?)", problemsRect.Y)
+	}
+	if statusRect.Y+statusRect.H >= problemsRect.Y {
+		t.Fatalf("editor status row (y=%v..%v) should end above the problems panel (y=%v)",
+			statusRect.Y, statusRect.Y+statusRect.H, problemsRect.Y)
+	}
+}
+
 func TestHostsWorkbenchInitialViewShowsSafetyCopy(t *testing.T) {
 	model := newTestHostsWorkbench(demo.NewHostsService())
 	tester := ui.NewTester(model.View, 1120, 760)
