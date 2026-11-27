@@ -199,16 +199,16 @@ func (s *Store) scanProfiles(root string, mode ProfileMode, result *ScanResult) 
 
 func (s *Store) scanSnapshots(root string, result *ScanResult) {
 	data, err := s.vol.ReadFile(filepath.Join(root, FileSnapshotIndex))
-	if err != nil {
-		if !IsNotExist(err) {
-			result.Issues = append(result.Issues, scanIssue(CodeReadFailed, FileSnapshotIndex, err))
-		}
-		return
+	if err != nil && !IsNotExist(err) {
+		result.Issues = append(result.Issues, scanIssue(CodeReadFailed, FileSnapshotIndex, err))
 	}
-	var index SnapshotIndex
-	if err := unmarshalModel(data, &index); err != nil {
-		result.Issues = append(result.Issues, modelScanIssue(FileSnapshotIndex, err))
-		return
+	// index 缺失或损坏恰恰是孤儿产生的典型场景（登记/写出失败），
+	// 此时以空索引继续跑孤儿扫描，让残留文件可见（review 建议项）。
+	index := SnapshotIndex{}
+	if err == nil {
+		if uerr := unmarshalModel(data, &index); uerr != nil {
+			result.Issues = append(result.Issues, modelScanIssue(FileSnapshotIndex, uerr))
+		}
 	}
 	for _, meta := range index.Snapshots {
 		rel := filepath.Join(DirSnapshots, meta.ID+".json")

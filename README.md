@@ -92,10 +92,10 @@ go run ./cmd/storage-probe -root fixtures/storage/mixed-invalid
 
 ## 运行测试构建
 
-Phase 2 构建产物仅用于专用 M 系列 Mac 测试环境。从 GitHub Actions 下载 `mhost-phase-2-darwin-arm64` artifact 后，需要在“隐私与安全性”中显式允许打开，或仅对测试包移除 quarantine 属性：
+Alpha 构建产物用于 M 系列 Mac 真机验证。从 GitHub Actions 下载 `mhost-alpha-darwin-arm64` artifact 后，需要在“隐私与安全性”中显式允许打开，或仅对测试包移除 quarantine 属性：
 
 ```sh
-xattr -dr com.apple.quarantine "/path/to/mHost Phase 2.app"
+xattr -dr com.apple.quarantine "/path/to/mHost.app"
 ```
 
 ad-hoc 签名不代表通过 Apple 公证，Gatekeeper 提示属于预期行为，不以 `spctl` 通过作为验收条件。

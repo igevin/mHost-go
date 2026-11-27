@@ -421,3 +421,39 @@ func TestAlphaModelWiresPickerAndExposesIt(t *testing.T) {
 		t.Fatal("DirectoryPicker() not exposed for App parent wiring")
 	}
 }
+
+func TestExportImportSetBusyPhase(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	exportDir := t.TempDir()
+	model := newAdminWorkbench(t, svc)
+	model.Load()
+	model.SelectProfile(model.Profiles[0].ID)
+	model.Picker = blockingPicker{dir: exportDir, release: make(chan struct{})}
+
+	go model.ExportSelected()
+	deadline := time.Now().Add(2 * time.Second)
+	for !model.busy() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !model.busy() {
+		t.Fatal("export should set busy phase while picker is open")
+	}
+	model.Picker.(blockingPicker).release <- struct{}{}
+	deadline = time.Now().Add(2 * time.Second)
+	for model.busy() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if model.busy() {
+		t.Fatal("export should clear busy phase after completion")
+	}
+}
+
+type blockingPicker struct {
+	dir     string
+	release chan struct{}
+}
+
+func (p blockingPicker) PickDirectory(ctx context.Context, opts app.DirectoryOptions) (string, error) {
+	<-p.release
+	return p.dir, nil
+}

@@ -239,6 +239,7 @@ func (m *HostsWorkbenchModel) ExportSelected() {
 		return
 	}
 	id, ctx := m.beginOperation()
+	m.Phase = HostsPhaseApplying
 	m.Problem = nil
 	profileID := m.SelectedID
 	m.runAsync(func() {
@@ -282,6 +283,7 @@ func (m *HostsWorkbenchModel) ImportFromDirectory() {
 		return
 	}
 	id, ctx := m.beginOperation()
+	m.Phase = HostsPhaseApplying
 	m.Problem = nil
 	m.runAsync(func() {
 		dir, err := m.Picker.PickDirectory(ctx, app.DirectoryOptions{

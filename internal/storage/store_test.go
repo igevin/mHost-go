@@ -275,3 +275,34 @@ func TestScanReportsOrphanSnapshotFiles(t *testing.T) {
 		t.Fatalf("issue = %+v", orphanIssues[0])
 	}
 }
+
+func TestScanReportsOrphanSnapshotsWithoutIndex(t *testing.T) {
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, DirSnapshots)
+	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// 无 index.json：典型孤儿场景（登记/写出失败）
+	orphan := `{"id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","name":"orphan","profile_count":0,"created_at":"2026-11-01T00:00:00Z","profiles":[]}`
+	if err := os.WriteFile(filepath.Join(snapshotDir, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.json"), []byte(orphan), 0o600); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+	manifest := `{"version":2,"app_version":"0.4.2","updated_at":"2026-11-01T00:00:00Z","dns_enabled":false,"original_dns":{"kind":"dhcp_empty"}}`
+	if err := os.WriteFile(filepath.Join(root, FileManifest), []byte(manifest), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	result, err := newTestStore().Scan(root)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	var orphanIssues []ScanIssue
+	for _, issue := range result.Issues {
+		if issue.Code == "orphan_snapshot" {
+			orphanIssues = append(orphanIssues, issue)
+		}
+	}
+	if len(orphanIssues) != 1 {
+		t.Fatalf("orphan issues = %v, all = %v", orphanIssues, result.Issues)
+	}
+}
