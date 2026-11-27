@@ -31,7 +31,7 @@ func TestServer_RespondsToPhase0Query(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	t.Cleanup(func() { _ = connection.Close() })
 	if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -47,13 +47,17 @@ func TestServer_RespondsToPhase0Query(t *testing.T) {
 	if err := response.Unpack(buffer[:n]); err != nil {
 		t.Fatal(err)
 	}
-	if response.Header.ID != 42 || !response.Header.Response || response.Header.RCode != dnsmessage.RCodeSuccess {
+	if response.ID != 42 || !response.Response || response.RCode != dnsmessage.RCodeSuccess {
 		t.Fatalf("response header = %+v", response.Header)
 	}
 	if len(response.Answers) != 1 {
 		t.Fatalf("answers = %+v", response.Answers)
 	}
-	if got := response.Answers[0].Body.(*dnsmessage.AResource).A; got != [4]byte{192, 0, 2, 53} {
+	answer, ok := response.Answers[0].Body.(*dnsmessage.AResource)
+	if !ok {
+		t.Fatalf("answer body = %+v", response.Answers[0].Body)
+	}
+	if got := answer.A; got != [4]byte{192, 0, 2, 53} {
 		t.Fatalf("answer = %v", got)
 	}
 }

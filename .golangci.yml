@@ -1,0 +1,23 @@
+# golangci-lint v2 配置
+# 官方文档: https://golangci-lint.run/docs/configuration/file/
+# 校验命令: golangci-lint config verify
+version: "2"
+
+linters:
+  # standard = errcheck + govet + ineffassign + staticcheck + unused
+  default: standard
+  enable:
+    - errorlint
+    - misspell
+    - nolintlint
+    - unconvert
+  settings:
+    errcheck:
+      # 类型断言也必须显式处理，避免运行时 panic
+      check-type-assertions: true
+  exclusions:
+    generated: lax
+
+formatters:
+  enable:
+    - gofmt

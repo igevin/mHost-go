@@ -39,7 +39,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "write readiness: %v\n", err)
 			os.Exit(1)
 		}
-		defer os.Remove(*readyFile)
+		defer func() {
+			if err := os.Remove(*readyFile); err != nil {
+				fmt.Fprintf(os.Stderr, "remove readiness file: %v\n", err)
+			}
+		}()
 	}
 
 	signals := make(chan os.Signal, 1)

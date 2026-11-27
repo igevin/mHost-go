@@ -1,0 +1,124 @@
+{
+  "tasks": [
+    {
+      "label": "go: test",
+      "command": "make",
+      "args": ["test"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "test"]
+    },
+    {
+      "label": "go: test (race)",
+      "command": "make",
+      "args": ["test-race"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "test"]
+    },
+    {
+      "label": "go: test (coverage)",
+      "command": "make",
+      "args": ["test-cover"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "test"]
+    },
+    {
+      "label": "go: lint",
+      "command": "golangci-lint",
+      "args": ["run", "./..."],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "lint"]
+    },
+    {
+      "label": "go: vet",
+      "command": "make",
+      "args": ["vet"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "lint"]
+    },
+    {
+      "label": "go: fmt",
+      "command": "make",
+      "args": ["fmt"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "fmt"]
+    },
+    {
+      "label": "go: fmt (check only)",
+      "command": "make",
+      "args": ["fmt-check"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "fmt"]
+    },
+    {
+      "label": "go: tidy",
+      "command": "make",
+      "args": ["tidy"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go"]
+    },
+    {
+      "label": "go: build",
+      "command": "make",
+      "args": ["build"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "build"]
+    },
+    {
+      "label": "go: run (desktop)",
+      "command": "make",
+      "args": ["run"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": true,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "run"]
+    },
+    {
+      "label": "go: run (dns proxy)",
+      "command": "make",
+      "args": ["run-proxy"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": true,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "run"]
+    },
+    {
+      "label": "go: package (darwin/arm64)",
+      "command": "make",
+      "args": ["package-darwin"],
+      "cwd": "$ZED_WORKTREE_ROOT",
+      "use_new_terminal": true,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "tags": ["go", "build", "macos"]
+    }
+  ]
+}

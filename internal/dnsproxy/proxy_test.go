@@ -37,7 +37,7 @@ func TestProxy_ForwardsDNSQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	t.Cleanup(func() { _ = connection.Close() })
 	if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestProxy_ForwardsDNSQuery(t *testing.T) {
 	if err := response.Unpack(buffer[:n]); err != nil {
 		t.Fatal(err)
 	}
-	if response.Header.ID != 7 || len(response.Answers) != 1 {
+	if response.ID != 7 || len(response.Answers) != 1 {
 		t.Fatalf("response = %+v", response)
 	}
 }

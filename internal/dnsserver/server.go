@@ -87,7 +87,7 @@ func makeResponse(query []byte) ([]byte, error) {
 		Questions: []dnsmessage.Question{question},
 	}
 	if question.Name.String() == "phase0.test." && question.Type == dnsmessage.TypeA && question.Class == dnsmessage.ClassINET {
-		message.Header.RCode = dnsmessage.RCodeSuccess
+		message.RCode = dnsmessage.RCodeSuccess
 		message.Answers = []dnsmessage.Resource{{
 			Header: dnsmessage.ResourceHeader{
 				Name:  question.Name,

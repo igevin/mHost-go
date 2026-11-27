@@ -70,7 +70,9 @@ func (p *Proxy) forward(packet []byte, client *net.UDPAddr) {
 	if err != nil {
 		return
 	}
-	defer connection.Close()
+	defer func() {
+		_ = connection.Close()
+	}()
 	if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		return
 	}

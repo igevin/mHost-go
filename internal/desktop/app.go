@@ -64,7 +64,9 @@ func (a *App) Run() error {
 		}
 	})
 	mygo.App.WhenReady(a.ready)
-	defer a.Cleanup()
+	defer func() {
+		_ = a.Cleanup()
+	}()
 	return mygo.App.Run()
 }
 
