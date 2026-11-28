@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
 	app "github.com/igevin/mHost-go/internal/app"
 	"github.com/igevin/mHost-go/internal/app/alphaboot"
 	"github.com/igevin/mHost-go/internal/app/hostssvc"
@@ -448,5 +449,226 @@ func TestExportImportBusyGuardsAndPhaseRestore(t *testing.T) {
 	}
 	if model.Info == "" {
 		t.Fatal("export info missing")
+	}
+}
+
+// #35：History 页整合 Apply 备份历史，支持任意备份恢复（Restore），
+// 恢复后刷新 Active 状态、System Hosts 与备份计数缓存。
+
+func newSyncAlphaModel(t *testing.T, svc *hostssvc.Service) *AlphaModel {
+	t.Helper()
+	model := NewAlphaModel(&alphaboot.Result{Service: svc}, nil)
+	model.Async = func(fn func()) { fn() }
+	model.Dispatch = func(fn func()) { fn() }
+	model.Hosts.Async = func(fn func()) { fn() }
+	model.Hosts.Dispatch = func(fn func()) { fn() }
+	return model
+}
+
+func applyFirstProfile(t *testing.T, svc *hostssvc.Service) app.ApplyReceipt {
+	t.Helper()
+	profiles, err := svc.ListProfiles(context.Background())
+	if err != nil || len(profiles) == 0 {
+		t.Fatalf("list profiles: %v (%d)", err, len(profiles))
+	}
+	plan, err := svc.PreviewApply(context.Background(), profiles[0].ID, nil)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	receipt, err := svc.Apply(context.Background(), plan.ID, nil)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	return receipt
+}
+
+func TestAlphaHistoryTabReplacesSnapshots(t *testing.T) {
+	if alphaNavTabs[1] != "History" {
+		t.Fatalf("nav tabs = %v, want History at index 1", alphaNavTabs)
+	}
+}
+
+func TestAlphaHistoryListsApplyBackups(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	applyFirstProfile(t, svc)
+
+	model := newSyncAlphaModel(t, svc)
+	model.LoadHistory(context.Background())
+	if model.historyErr != nil {
+		t.Fatalf("history err = %v", model.historyErr)
+	}
+	if len(model.history) != 1 {
+		t.Fatalf("history = %+v", model.history)
+	}
+	entry := model.history[0]
+	if entry.ProfileName != "profile-1" {
+		t.Fatalf("profile = %q, want profile-1", entry.ProfileName)
+	}
+	if entry.Result != app.BackupResultApplied || !entry.Available {
+		t.Fatalf("entry = %+v, want applied+available", entry)
+	}
+}
+
+func TestAlphaRestoreFlowConfirmsThenRefreshes(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	applyFirstProfile(t, svc)
+
+	model := newSyncAlphaModel(t, svc)
+	model.Hosts.Load()
+	if model.Hosts.Applied.ProfileID == "" {
+		t.Fatal("profile should be applied before restore")
+	}
+	before, err := svc.SystemHostsContent(context.Background())
+	if err != nil || !strings.Contains(before, "mHost start") {
+		t.Fatalf("hosts before restore = %q err=%v", before, err)
+	}
+
+	model.LoadHistory(context.Background())
+	if len(model.history) != 1 {
+		t.Fatalf("history = %+v", model.history)
+	}
+	backupID := model.history[0].ID
+
+	// 未知备份不进入确认态
+	model.RequestRestore("does-not-exist")
+	if model.pendingRestore != nil {
+		t.Fatal("unknown backup should not arm restore")
+	}
+	// 确认前可取消，且系统未变
+	model.RequestRestore(backupID)
+	if model.pendingRestore == nil || model.pendingRestore.ID != backupID {
+		t.Fatalf("pending restore = %+v", model.pendingRestore)
+	}
+	model.CancelRestore()
+	if model.pendingRestore != nil {
+		t.Fatal("cancel should clear pending restore")
+	}
+	content, _ := svc.SystemHostsContent(context.Background())
+	if content != before {
+		t.Fatal("hosts changed before confirm")
+	}
+
+	model.RequestRestore(backupID)
+	model.ConfirmRestore()
+	if model.restoring {
+		t.Fatal("restoring flag should clear after restore")
+	}
+	if model.restoreProblem != nil {
+		t.Fatalf("restore problem = %+v", model.restoreProblem)
+	}
+	if model.restoreInfo == "" {
+		t.Fatal("restore success info missing")
+	}
+
+	// 系统 hosts 恢复到应用前（无管理块），Active 归零并刷新到主页面
+	content, err = svc.SystemHostsContent(context.Background())
+	if err != nil {
+		t.Fatalf("read hosts: %v", err)
+	}
+	if strings.Contains(content, "mHost start") {
+		t.Fatalf("hosts still managed after restore: %q", content)
+	}
+	if model.Hosts.Applied.ProfileID != "" {
+		t.Fatalf("applied after restore = %+v, want empty", model.Hosts.Applied)
+	}
+
+	// 缓存失效：System Hosts / 备份计数 / 历史（安全备份已生成）
+	if model.systemHostsLoaded || model.backupCountLoaded {
+		t.Fatal("system hosts and backup count caches must invalidate after restore")
+	}
+	model.LoadHistory(context.Background())
+	if len(model.history) != 2 {
+		t.Fatalf("history after restore = %+v, want 2 (apply + safety)", model.history)
+	}
+	safety := model.history[0]
+	if safety.Result != app.BackupResultApplied || !safety.Available {
+		t.Fatalf("safety backup = %+v", safety)
+	}
+	if safety.ProfileID != "" {
+		t.Fatalf("safety backup profile = %q, want empty (restored to no profile)", safety.ProfileID)
+	}
+}
+
+func TestAlphaRestoreFailureKeepsSystemAndReports(t *testing.T) {
+	// 自建服务以拿到备份目录：删掉备份文件后恢复必然失败
+	root := t.TempDir()
+	hostsPath := filepath.Join(t.TempDir(), "hosts")
+	if err := os.WriteFile(hostsPath, []byte("127.0.0.1 keep.me\n"), 0o644); err != nil {
+		t.Fatalf("write hosts: %v", err)
+	}
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	svc := hostssvc.New(root, hostsPath, backupDir, storage.NewOSVolume())
+	if _, err := svc.CreateProfile(context.Background(), "profile-1", "127.0.0.1 a.com\n"); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	receipt := applyFirstProfile(t, svc)
+	backups, err := svc.ListApplyBackups(context.Background())
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backups = %v err=%v", backups, err)
+	}
+	if err := os.Remove(filepath.Join(backupDir, "hosts-"+backups[0].ID+".bak")); err != nil {
+		t.Fatalf("remove backup file: %v", err)
+	}
+
+	model := newSyncAlphaModel(t, svc)
+	model.Hosts.Load()
+	model.LoadHistory(context.Background())
+
+	model.RequestRestore(receipt.RollbackRef.ID)
+	model.ConfirmRestore()
+	if model.restoreProblem == nil {
+		t.Fatal("restore problem missing after failed restore")
+	}
+	if model.restoring {
+		t.Fatal("restoring flag should clear after failure")
+	}
+	content, _ := svc.SystemHostsContent(context.Background())
+	if !strings.Contains(content, "mHost start") {
+		t.Fatalf("hosts changed after failed restore: %q", content)
+	}
+	if model.Hosts.Applied.ProfileID == "" {
+		t.Fatalf("applied changed after failed restore: %+v", model.Hosts.Applied)
+	}
+}
+
+// TestAlphaHistoryPageRendersBackupsAndRestoreDialog 走渲染层：History
+// 页展示备份列表，Restore… 弹出确认对话框，确认后系统恢复、Active 刷新。
+func TestAlphaHistoryPageRendersBackupsAndRestoreDialog(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	applyFirstProfile(t, svc)
+	model := newSyncAlphaModel(t, svc)
+	model.Hosts.Load()
+
+	tester := ui.NewTester(model.View, 1120, 760)
+	model.SelectedNav = 1
+	tester.Frame()
+	for _, want := range []string{"History", "Apply backups", "profile-1", "Applied", "Restore…"} {
+		if !tester.HasText(want) {
+			t.Fatalf("text %q missing: %q", want, tester.Texts())
+		}
+	}
+
+	if err := tester.Click("Restore…"); err != nil {
+		t.Fatalf("click restore: %v (texts %q)", err, tester.Texts())
+	}
+	tester.Frame()
+	if !tester.HasText("Restore backup") {
+		t.Fatalf("confirm dialog missing: %q", tester.Texts())
+	}
+	if err := tester.Click("Restore"); err != nil {
+		t.Fatalf("click confirm restore: %v (texts %q)", err, tester.Texts())
+	}
+	if model.restoreProblem != nil {
+		t.Fatalf("restore problem = %+v", model.restoreProblem)
+	}
+	if model.Hosts.Applied.ProfileID != "" {
+		t.Fatalf("applied after restore = %+v", model.Hosts.Applied)
+	}
+	content, err := svc.SystemHostsContent(context.Background())
+	if err != nil {
+		t.Fatalf("read hosts: %v", err)
+	}
+	if strings.Contains(content, "mHost start") {
+		t.Fatalf("hosts still managed after restore: %q", content)
 	}
 }

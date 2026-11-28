@@ -405,6 +405,24 @@ func (m *HostsWorkbenchModel) Rollback(backupID string) {
 	})
 }
 
+// ReloadApplied 只刷新 Active/Drift 指示（#35：历史页恢复备份后主
+// 页面 Active 状态需同步）。不改 Phase、不触碰编辑器与草稿；读取
+// 失败静默——触发方（历史页）已展示自己的操作结果。
+func (m *HostsWorkbenchModel) ReloadApplied() {
+	if m.Service == nil {
+		return
+	}
+	m.runAsync(func() {
+		applied, err := m.Service.AppliedState(context.Background())
+		if err != nil {
+			return
+		}
+		m.dispatch(func() {
+			m.Applied = applied
+		})
+	})
+}
+
 // refreshProfiles and refreshApplied run service reads on the worker side and
 // merge results on the main thread; service I/O never runs inside Dispatch.
 func (m *HostsWorkbenchModel) refreshProfiles(id uint64, ctx context.Context) {

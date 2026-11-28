@@ -74,6 +74,14 @@ type Conflict struct {
 	IPs    []string
 }
 
+// ApplyBackupResult 是 Apply 备份对应操作的结果标记（#35 历史页：
+// 备份在写入前创建，操作完成后补标）。
+const (
+	BackupResultApplied  = "applied"
+	BackupResultFailed   = "failed"
+	BackupResultCanceled = "canceled"
+)
+
 type ApplyBackupRef struct {
 	ID           string
 	ProfileID    string
@@ -81,6 +89,12 @@ type ApplyBackupRef struct {
 	CreatedAt    time.Time
 	OperationID  string
 	BlockContent string
+	// Result 标记该备份对应操作的结果（BackupResult* 之一）；
+	// 空值表示未知（旧记录或写入中断）。
+	Result string
+	// Available 报告备份文件当前是否可读；false 时 BlockContent
+	// 为空且该备份不可恢复。
+	Available bool
 }
 
 type ApplyReceipt struct {

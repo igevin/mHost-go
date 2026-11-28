@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -14,7 +15,8 @@ import (
 )
 
 // Alpha 导航页：Hosts 为主链路；其余页面 #26 实现，本阶段标记未开放。
-var alphaNavTabs = []string{"Hosts", "Snapshots", "System Hosts", "Settings"}
+// #35：Snapshots 页整合为 History（Apply 备份可恢复历史）。
+var alphaNavTabs = []string{"Hosts", "History", "System Hosts", "Settings"}
 
 // AlphaModel 是 Hosts-only Alpha 的应用壳（#25/#26）：导航 +
 // Hosts 主链路 + 快照/系统 Hosts/设置页 + 启动信息展示。
@@ -32,7 +34,19 @@ type AlphaModel struct {
 	started     bool
 	closed      atomic.Bool
 
-	// 快照页（懒加载，磁盘扫描在 worker 侧执行）
+	// 历史页（#35）：Apply 备份列表（懒加载，读盘在 worker 侧执行）
+	historyLoaded  bool
+	historyLoading bool
+	history        []app.ApplyBackupRef
+	historyErr     error
+
+	// 恢复确认与执行（pendingRestore 非 nil 时展示确认对话框）
+	pendingRestore *app.ApplyBackupRef
+	restoring      bool
+	restoreInfo    string
+	restoreProblem *app.UIError
+
+	// 存储快照子区（旧存储模型，与 Apply 备份分开展示）
 	snapshotsLoaded  bool
 	snapshotsLoading bool
 	snapshots        []storage.SnapshotEntry
@@ -98,7 +112,7 @@ func (m *AlphaModel) View(c *ui.Context) {
 		case 0:
 			m.Hosts.View(c)
 		case 1:
-			m.snapshotsView(c)
+			m.historyView(c)
 		case 2:
 			m.systemHostsView(c)
 		default:
@@ -184,19 +198,155 @@ func (m *AlphaModel) LoadSnapshots() {
 	})
 }
 
-func (m *AlphaModel) snapshotsView(c *ui.Context) {
+// LoadHistory 读取 Apply 备份历史（#35）。磁盘读取在 worker 侧执行，
+// 结果合并回主线程。
+func (m *AlphaModel) LoadHistory(ctx context.Context) {
+	if m.historyLoaded || m.historyLoading || m.Hosts.Service == nil {
+		return
+	}
+	m.historyLoading = true
+	m.Async(func() {
+		backups, err := m.Hosts.Service.ListApplyBackups(ctx)
+		m.Dispatch(func() {
+			if m.closed.Load() {
+				return
+			}
+			m.historyLoading = false
+			m.historyLoaded = true
+			m.history = backups
+			if err != nil {
+				m.history = nil
+				m.historyErr = err
+				return
+			}
+			m.historyErr = nil
+		})
+	})
+}
+
+// RequestRestore 把指定备份置为待确认恢复目标；未知 ID 忽略。
+func (m *AlphaModel) RequestRestore(backupID string) {
+	if m.restoring {
+		return
+	}
+	for i := range m.history {
+		if m.history[i].ID == backupID {
+			target := m.history[i]
+			m.pendingRestore = &target
+			m.restoreProblem = nil
+			return
+		}
+	}
+}
+
+func (m *AlphaModel) CancelRestore() { m.pendingRestore = nil }
+
+// ConfirmRestore 执行恢复：与最近回执的 Undo This Apply 同一服务语义
+// （Service.Rollback，含管理员授权、写前安全备份、原子写、读回验证）。
+// 成功后刷新 Active 状态、System Hosts 与备份计数缓存，并重新加载历史。
+func (m *AlphaModel) ConfirmRestore() {
+	if m.pendingRestore == nil || m.restoring || m.Hosts.Service == nil {
+		return
+	}
+	target := *m.pendingRestore
+	m.pendingRestore = nil
+	m.restoring = true
+	m.restoreInfo = ""
+	m.restoreProblem = nil
+	m.Async(func() {
+		_, err := m.Hosts.Service.Rollback(context.Background(), target.ID)
+		m.Dispatch(func() {
+			if m.closed.Load() {
+				return
+			}
+			m.restoring = false
+			// 无论成败都刷新历史：写前安全备份已生成并补标结果。
+			m.historyLoaded = false
+			if err != nil {
+				var uiErr *app.UIError
+				if errors.As(err, &uiErr) {
+					m.restoreProblem = uiErr
+				} else {
+					m.restoreProblem = &app.UIError{Kind: app.ErrorInternal, Message: err.Error()}
+				}
+				return
+			}
+			m.restoreInfo = fmt.Sprintf("Restored backup from %s · %s",
+				target.CreatedAt.Format("2006-01-02 15:04"), historyProfileLabel(target))
+			m.systemHostsLoaded = false
+			m.backupCountLoaded = false
+			m.Hosts.ReloadApplied()
+		})
+	})
+}
+
+// historyProfileLabel 给无归属（恢复到无 Active profile）的备份一个
+// 可读的占位名。
+func historyProfileLabel(ref app.ApplyBackupRef) string {
+	if ref.ProfileName == "" {
+		return "no active profile"
+	}
+	return ref.ProfileName
+}
+
+// backupResultLabel 把结果标记映射为历史页可读文案。
+func backupResultLabel(result string) string {
+	switch result {
+	case app.BackupResultApplied:
+		return "Applied"
+	case app.BackupResultFailed:
+		return "Failed"
+	case app.BackupResultCanceled:
+		return "Canceled"
+	default:
+		return "Result unknown"
+	}
+}
+
+func (m *AlphaModel) historyView(c *ui.Context) {
 	theme := c.Theme()
+	m.LoadHistory(context.Background())
 	m.LoadSnapshots()
 	ui.Column(c).Fill().Gap(12).Padding(16, 20).Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Snapshots").FontSize(20).Bold().Grow(1)
-			if ui.Button(c, "Refresh").Clicked() {
-				m.snapshotsLoaded = false
-				m.LoadSnapshots()
+			ui.Text(c, "History").FontSize(20).Bold().Grow(1)
+			if ui.Button(c, "Refresh").Disabled(m.historyLoading || m.restoring).Clicked() {
+				m.historyLoaded = false
+				m.LoadHistory(context.Background())
 			}
 		})
+
+		if m.restoring {
+			ui.Text(c, "Restoring… administrator authorization may be required.").TextColor(theme.TextMuted)
+		}
+		if m.restoreProblem != nil {
+			ui.Text(c, "Restore failed: "+m.restoreProblem.Message).TextColor(theme.TextMuted)
+			ui.Text(c, "The system hosts was not changed unless stated above. A safety backup is created before every restore; press Refresh and try again.").
+				FontSize(11).TextColor(theme.TextMuted)
+		}
+		if m.restoreInfo != "" {
+			ui.Text(c, m.restoreInfo).Bold()
+		}
+
+		m.restoreConfirmDialog(c)
+
+		ui.Text(c, "Apply backups").FontSize(14).Bold()
+		if m.historyLoading && !m.historyLoaded {
+			ui.Text(c, "Loading…").TextColor(theme.TextMuted)
+		}
+		if m.historyErr != nil {
+			ui.Text(c, "Cannot list apply backups: "+m.historyErr.Error()).TextColor(theme.TextMuted)
+		}
+		if m.historyLoaded && len(m.history) == 0 && m.historyErr == nil {
+			ui.Text(c, "No apply backups yet.").TextColor(theme.TextMuted)
+		}
+		for i := range m.history {
+			m.historyRow(c, &m.history[i])
+		}
+
+		ui.Text(c, "Storage snapshots").FontSize(14).Bold()
 		if len(m.snapshots) == 0 {
-			ui.Text(c, "No snapshots yet.").TextColor(theme.TextMuted)
+			ui.Text(c, "No storage snapshots.").FontSize(12).TextColor(theme.TextMuted)
 		}
 		for _, snapshot := range m.snapshots {
 			ui.Text(c, fmt.Sprintf("%s · %d profiles · %s",
@@ -207,8 +357,45 @@ func (m *AlphaModel) snapshotsView(c *ui.Context) {
 			ui.Text(c, fmt.Sprintf("%s: %s (%s)", issue.Code, issue.Message, issue.Path)).
 				FontSize(12).TextColor(theme.TextMuted)
 		}
-		ui.Text(c, "Snapshot create/restore ships in a later slice; backups of every Apply are on the Hosts page receipt.").FontSize(11).TextColor(theme.TextMuted)
 	})
+}
+
+// historyRow 渲染一条备份记录：时间、Profile、结果、可恢复性、恢复入口。
+func (m *AlphaModel) historyRow(c *ui.Context, backup *app.ApplyBackupRef) {
+	theme := c.Theme()
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, backup.CreatedAt.Format("2006-01-02 15:04")).SingleLine()
+		ui.Text(c, historyProfileLabel(*backup)).SingleLine().Grow(1)
+		ui.Text(c, backupResultLabel(backup.Result)).FontSize(12).TextColor(theme.TextMuted)
+		if !backup.Available {
+			ui.Text(c, "backup file missing").FontSize(12).TextColor(theme.TextMuted)
+			return
+		}
+		if ui.Button(c, "Restore…").Disabled(m.restoring).Clicked() {
+			m.RequestRestore(backup.ID)
+		}
+	})
+}
+
+// restoreConfirmDialog 恢复前确认：来源时间、原 Profile 与系统影响。
+func (m *AlphaModel) restoreConfirmDialog(c *ui.Context) {
+	if m.pendingRestore == nil {
+		return
+	}
+	open := true
+	target := *m.pendingRestore
+	message := fmt.Sprintf("Restore the backup from %s (profile: %s)?\nThis modifies the system hosts file. A safety backup of the current state is created first.",
+		target.CreatedAt.Format("2006-01-02 15:04"), historyProfileLabel(target))
+	switch ui.AlertDialog(c, &open, "Restore backup", message, "Restore", "Cancel") {
+	case 0:
+		m.ConfirmRestore()
+	case 1:
+		m.CancelRestore()
+	default:
+		if !open {
+			m.CancelRestore()
+		}
+	}
 }
 
 // LoadSystemHosts 读系统 hosts（只读视图）。读文件在 worker 侧执行。

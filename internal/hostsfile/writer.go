@@ -70,6 +70,9 @@ type BackupRecord struct {
 	CreatedAt       time.Time `json:"created_at"`
 	OperationID     string    `json:"operation_id"`
 	ContentSHA256   string    `json:"content_sha256"`
+	// Result 由服务层在写入完成后补标（applied/failed/canceled），
+	// 供历史页展示该次操作结果；空值表示未知（旧记录或写入中断）。
+	Result string `json:"result,omitempty"`
 }
 
 // SystemWriter 安全写入系统 hosts 文件：符号链接拒绝、写前备份、
@@ -231,6 +234,31 @@ func (w *SystemWriter) ListBackups() ([]BackupRecord, error) {
 // 裸 createBackup，service 层补齐元数据时用本方法）。
 func (w *SystemWriter) CreateBackupForProfile(content []byte, meta BackupRecord) (*BackupRecord, error) {
 	return w.createBackup(content, meta)
+}
+
+// MarkBackupResult 给索引中的备份记录补标操作结果（#35 历史页）。
+// 只修改 Result 字段，不触碰备份内容；找不到记录时报错。
+func (w *SystemWriter) MarkBackupResult(backupID, result string) error {
+	index, err := w.readIndex()
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range index {
+		if index[i].ID == backupID {
+			index[i].Result = result
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("no apply backup with ID %q", backupID)
+	}
+	data, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return err
+	}
+	return w.volume.WriteAtomic(filepath.Join(w.backupDir, backupIndexFile), data, 0o600)
 }
 
 // CurrentContent 读取当前系统 hosts 内容。
