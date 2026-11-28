@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 	app "github.com/igevin/mHost-go/internal/app"
 	"github.com/igevin/mHost-go/internal/app/alphaboot"
 	"github.com/igevin/mHost-go/internal/hostsfile"
@@ -16,7 +18,8 @@ import (
 
 // Alpha 导航页：Hosts 为主链路；其余页面 #26 实现，本阶段标记未开放。
 // #35：Snapshots 页整合为 History（Apply 备份可恢复历史）。
-var alphaNavTabs = []string{"Hosts", "History", "System Hosts", "Settings"}
+// #37：Settings 收敛为 Data（无可修改设置，只读数据信息）。
+var alphaNavTabs = []string{"Hosts", "History", "System Hosts", "Data"}
 
 // AlphaModel 是 Hosts-only Alpha 的应用壳（#25/#26）：导航 +
 // Hosts 主链路 + 快照/系统 Hosts/设置页 + 启动信息展示。
@@ -52,16 +55,22 @@ type AlphaModel struct {
 	snapshots        []storage.SnapshotEntry
 	snapshotIssues   []app.StorageIssue
 
-	// 系统 Hosts 页（懒加载）
+	// 系统 Hosts 页（懒加载；#37 只读浏览器：行号、管理块标记、跳转、复制）
 	systemHostsLoaded  bool
 	systemHostsLoading bool
 	systemHosts        string
 	systemHostsErr     error
+	systemHostsReadAt  time.Time
+	systemHostsViewer  *editor.State
 
-	// 设置页
+	// 数据页（#37：Settings 收敛为 Data，展示数据目录/系统 hosts 路径/备份计数）
 	backupCountLoaded  bool
 	backupCountLoading bool
 	backupCount        int
+	backupCountErr     error
+
+	// 主页面回执监听（#37：Apply/Rollback/Undo 后辅助页缓存失效）
+	lastReceiptOp string
 }
 
 // NewAlphaModel 构造 Alpha 壳。picker 为目录选择器（导入导出用）；
@@ -95,6 +104,8 @@ func (m *AlphaModel) Start() {
 
 func (m *AlphaModel) View(c *ui.Context) {
 	theme := c.Theme()
+	// #37：主页面 Apply/Rollback/Undo 完成后，辅助页缓存同步失效。
+	m.invalidateOnNewReceipt()
 	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).Gap(12).Padding(10, 20).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
 			ui.Text(c, "mHost").FontSize(20).Bold()
@@ -116,7 +127,7 @@ func (m *AlphaModel) View(c *ui.Context) {
 		case 2:
 			m.systemHostsView(c)
 		default:
-			m.settingsView(c)
+			m.dataView(c)
 		}
 	})
 }
@@ -311,7 +322,9 @@ func (m *AlphaModel) historyView(c *ui.Context) {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "History").FontSize(20).Bold().Grow(1)
 			if ui.Button(c, "Refresh").Disabled(m.historyLoading || m.restoring).Clicked() {
+				// 顶部 Refresh 同时重扫存储快照子区。
 				m.historyLoaded = false
+				m.snapshotsLoaded = false
 				m.LoadHistory(context.Background())
 			}
 		})
@@ -398,7 +411,8 @@ func (m *AlphaModel) restoreConfirmDialog(c *ui.Context) {
 	}
 }
 
-// LoadSystemHosts 读系统 hosts（只读视图）。读文件在 worker 侧执行。
+// LoadSystemHosts 读系统 hosts（只读视图）。读文件在 worker 侧执行；
+// 成功后填充只读浏览器并标记管理块（#37）。
 func (m *AlphaModel) LoadSystemHosts(ctx context.Context) {
 	if m.systemHostsLoaded || m.systemHostsLoading || m.Hosts.Admin == nil {
 		return
@@ -412,33 +426,121 @@ func (m *AlphaModel) LoadSystemHosts(ctx context.Context) {
 			}
 			m.systemHostsLoading = false
 			m.systemHosts, m.systemHostsErr, m.systemHostsLoaded = content, err, true
+			if err != nil {
+				return
+			}
+			m.systemHostsReadAt = time.Now()
+			m.presentSystemHosts()
 		})
 	})
+}
+
+// RefreshSystemHosts 手动重读系统 hosts（#37：外部修改后的刷新入口）。
+func (m *AlphaModel) RefreshSystemHosts() {
+	if m.systemHostsLoading {
+		return
+	}
+	m.systemHostsLoaded = false
+	m.LoadSystemHosts(context.Background())
+}
+
+// invalidateOnNewReceipt 在主页面写操作完成（回执 OperationID 变化）后
+// 失效辅助页缓存（#37）：System Hosts、备份计数与历史。每次 View 调用。
+func (m *AlphaModel) invalidateOnNewReceipt() {
+	if m.Hosts.Receipt == nil {
+		return
+	}
+	op := m.Hosts.Receipt.OperationID
+	if op == "" || op == m.lastReceiptOp {
+		return
+	}
+	m.lastReceiptOp = op
+	m.systemHostsLoaded = false
+	m.backupCountLoaded = false
+	m.historyLoaded = false
+}
+
+// systemHostsViewerState 惰性构造只读浏览器：等宽字体、行号、可选中
+// 复制，Cmd+F 查找条（MyGo editor 内建）。
+func (m *AlphaModel) systemHostsViewerState() *editor.State {
+	if m.systemHostsViewer == nil {
+		m.systemHostsViewer = &editor.State{
+			Buffer:          editor.NewBuffer(""),
+			Label:           "System hosts",
+			ReadOnly:        true,
+			KeepScrollbars:  true,
+			LineNumbers:     editor.LineNumbersOn,
+			NoScrollPastEnd: true,
+			RenderFindBar: func(c *ui.Context, bar ui.Element, find *editor.FindBar) {
+				editor.DefaultFindBar(c, bar, find)
+			},
+		}
+	}
+	return m.systemHostsViewer
+}
+
+// presentSystemHosts 把读到的系统 hosts 装进只读浏览器，并用 Info 级
+// 诊断标记管理块（下划线 + 悬停说明 + 滚动条标记，即 MyGo 现有的
+// 高亮机制）。
+func (m *AlphaModel) presentSystemHosts() {
+	viewer := m.systemHostsViewerState()
+	viewer.Buffer.Set(m.systemHosts)
+	var marks []editor.Diagnostic
+	if start, end, ok := hostsfile.ExtractManagedBlockBytes(m.systemHosts); ok {
+		marks = append(marks, editor.Diagnostic{
+			Start: start, End: end,
+			Severity: editor.SeverityInfo,
+			Message:  "mHost managed block",
+			Source:   "mHost",
+		})
+	}
+	viewer.SetDiagnostics(viewer.Buffer.Version(), marks)
 }
 
 func (m *AlphaModel) systemHostsView(c *ui.Context) {
 	theme := c.Theme()
 	m.LoadSystemHosts(context.Background())
 	ui.Column(c).Fill().Gap(12).Padding(16, 20).Children(func() {
-		ui.Text(c, "System Hosts · read only").FontSize(20).Bold()
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "System Hosts · read only").FontSize(20).Bold().Grow(1)
+			if ui.Button(c, "Refresh").Disabled(m.systemHostsLoading).Clicked() {
+				m.RefreshSystemHosts()
+			}
+			if m.systemHostsLoaded && m.systemHostsErr == nil && m.systemHosts != "" {
+				if ui.Button(c, "Copy All").Clicked() {
+					c.WriteClipboard(m.systemHosts)
+				}
+			}
+		})
+		if m.systemHostsLoading && !m.systemHostsLoaded {
+			ui.Text(c, "Loading…").TextColor(theme.TextMuted)
+		}
 		if m.systemHostsErr != nil {
+			// 读取失败不拿旧内容冒充最新：只展示错误与上次成功读取时间。
 			ui.Text(c, "Cannot read the system hosts file: "+m.systemHostsErr.Error()).TextColor(theme.TextMuted)
+			if !m.systemHostsReadAt.IsZero() {
+				ui.Text(c, "Last successful read: "+m.systemHostsReadAt.Format("2006-01-02 15:04")).
+					FontSize(12).TextColor(theme.TextMuted)
+			}
 			return
 		}
 		if !m.systemHostsLoaded {
-			ui.Text(c, "Loading…").TextColor(theme.TextMuted)
 			return
 		}
-		if managedStart := managedBlockBounds(m.systemHosts); managedStart >= 0 {
-			ui.Text(c, fmt.Sprintf("mHost managed block at line %d", managedStart+1)).FontSize(12).TextColor(theme.TextMuted)
+		if blockLine := managedBlockBounds(m.systemHosts); blockLine >= 0 {
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, fmt.Sprintf("mHost managed block at line %d", blockLine+1)).FontSize(12).TextColor(theme.TextMuted)
+				if ui.Button(c, "Jump to Managed Block").Clicked() {
+					m.systemHostsViewerState().GoTo(editor.Pos{Line: blockLine})
+				}
+			})
 		} else {
 			ui.Text(c, "No mHost managed block yet.").FontSize(12).TextColor(theme.TextMuted)
 		}
-		ui.Scroll(c).Fill().Children(func() {
-			for _, line := range strings.Split(m.systemHosts, "\n") {
-				ui.Text(c, line).FontSize(12)
-			}
-		})
+		if m.systemHostsLoading {
+			ui.Text(c, "Refreshing…").FontSize(12).TextColor(theme.TextMuted)
+		}
+		editor.View(c, m.systemHostsViewerState()).Grow(1).FillWidth()
 	})
 }
 
@@ -452,7 +554,8 @@ func managedBlockBounds(content string) int {
 	return -1
 }
 
-// LoadBackupCount 设置页展示 apply 备份数量。读盘在 worker 侧执行。
+// LoadBackupCount 数据页展示 apply 备份数量。读盘在 worker 侧执行；
+// 失败保留旧计数并展示错误（#37：不把旧计数伪装成最新）。
 func (m *AlphaModel) LoadBackupCount(ctx context.Context) {
 	if m.backupCountLoaded || m.backupCountLoading || m.Hosts.Service == nil {
 		return
@@ -466,25 +569,52 @@ func (m *AlphaModel) LoadBackupCount(ctx context.Context) {
 			}
 			m.backupCountLoading = false
 			m.backupCountLoaded = true
-			if err == nil {
-				m.backupCount = len(backups)
+			if err != nil {
+				m.backupCountErr = err
+				return
+			}
+			m.backupCountErr = nil
+			m.backupCount = len(backups)
+		})
+	})
+}
+
+// dataView 是 Settings 的收敛形态（#37）：无可修改设置，只读展示
+// 数据目录、系统 hosts 路径与 Apply 备份计数，路径可复制。
+func (m *AlphaModel) dataView(c *ui.Context) {
+	theme := c.Theme()
+	m.LoadBackupCount(context.Background())
+	ui.Column(c).Gap(12).Padding(16, 20).Children(func() {
+		ui.Text(c, "Data").FontSize(20).Bold()
+		if m.Boot != nil {
+			m.dataPathRow(c, "Data directory", m.Boot.DataDir)
+			m.dataPathRow(c, "System hosts", m.Boot.HostsPath)
+		}
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			label := fmt.Sprintf("Apply backups: %d", m.backupCount)
+			if m.backupCountLoading && !m.backupCountLoaded {
+				label = "Apply backups: loading…"
+			}
+			ui.Text(c, label).SingleLine().Grow(1)
+			if m.backupCountErr != nil {
+				ui.Text(c, "count unavailable: "+m.backupCountErr.Error()).FontSize(12).TextColor(theme.TextMuted)
+			}
+			if ui.Button(c, "Refresh").Disabled(m.backupCountLoading).Clicked() {
+				m.backupCountLoaded = false
+				m.LoadBackupCount(context.Background())
 			}
 		})
 	})
 }
 
-func (m *AlphaModel) settingsView(c *ui.Context) {
-	theme := c.Theme()
-	m.LoadBackupCount(context.Background())
-	ui.Column(c).Gap(12).Padding(16, 20).Children(func() {
-		ui.Text(c, "Settings").FontSize(20).Bold()
-		if m.Boot != nil {
-			ui.Text(c, "Data directory: "+m.Boot.DataDir)
-			ui.Text(c, "System hosts: "+m.Boot.HostsPath)
+// dataPathRow 展示一条长路径：单行截断 + 复制入口（#37）。
+func (m *AlphaModel) dataPathRow(c *ui.Context, label, path string) {
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, label+":").SingleLine()
+		ui.Text(c, path).SingleLine().Grow(1)
+		if path != "" && ui.Button(c, "Copy").Clicked() {
+			c.WriteClipboard(path)
 		}
-		ui.Text(c, fmt.Sprintf("Apply backups: %d", m.backupCount)).SingleLine()
-		ui.Text(c, "Import/Export: use the Import… / Export… buttons on the Hosts page.").FontSize(12).TextColor(theme.TextMuted)
-		ui.Text(c, "DNS and AdBlock are not part of the Hosts-only Alpha.").FontSize(12).TextColor(theme.TextMuted)
 	})
 }
 
