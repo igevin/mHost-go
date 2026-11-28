@@ -68,7 +68,7 @@ func InstallWith(runner Runner, src, target string, mode fs.FileMode) error {
 	}
 	text := string(out)
 	switch {
-	case strings.Contains(text, "User canceled") || strings.Contains(text, "-128"):
+	case strings.Contains(text, "User canceled") || strings.Contains(text, "errAEUserCanceledNumber"):
 		return fmt.Errorf("%w: %v", ErrCanceled, err)
 	case strings.Contains(text, "-60005") || strings.Contains(text, "authorization failed"):
 		return fmt.Errorf("%w: %v", ErrAuthFailed, err)

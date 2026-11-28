@@ -104,8 +104,9 @@ func TestInstallWithClassification(t *testing.T) {
 		wantErr error // nil 表示期待非哨兵的普通错误/成功
 	}{
 		{name: "success", output: "", runErr: nil, wantErr: nil},
-		{name: "user canceled en", output: "errAEUserCanceledNumber -128 User canceled.", runErr: errors.New("exit status 1"), wantErr: ErrCanceled},
-		{name: "user canceled number only", output: "error number -128", runErr: errors.New("exit status 1"), wantErr: ErrCanceled},
+		{name: "user canceled wording", output: "errAEUserCanceledNumber -128 User canceled.", runErr: errors.New("exit status 1"), wantErr: ErrCanceled},
+		// 恰好含 -128 但非取消语义的输出不得误判（如字节数/PID）
+		{name: "minus 128 lookalike is generic", output: "cat: wrote 4096 bytes, offset -128", runErr: errors.New("exit status 1"), wantErr: nil},
 		{name: "auth failed wrong password", output: "execution error: Administrator authorization failed. (-60005)", runErr: errors.New("exit status 1"), wantErr: ErrAuthFailed},
 		{name: "auth failed wording", output: "authorization failed for unknown reason", runErr: errors.New("exit status 1"), wantErr: ErrAuthFailed},
 		{name: "generic failure", output: "cat: /etc/hosts.mhost-new: No space left on device", runErr: errors.New("exit status 1"), wantErr: nil},
