@@ -409,3 +409,57 @@ func TestApplyBackupFailureAbortsBeforeWrite(t *testing.T) {
 		t.Fatalf("hosts changed despite backup failure: %q", got)
 	}
 }
+
+// recordMover 记录 Move 的入参（不真正落位），用于验证回落行为。
+type recordMover struct {
+	tempPath string
+	target   string
+	err      error
+}
+
+func (m *recordMover) Move(tempPath, target string) error {
+	m.tempPath, m.target = tempPath, target
+	return m.err
+}
+
+// TestAtomicWriteFallsBackToTempDirWhenTargetDirNotWritable 覆盖生产场景：
+// /etc 对普通用户不可写，临时文件必须回落到用户临时目录暂存，
+// 由平台 Mover（darwin 提权安装）负责落位。root 下 0500 目录拦不住
+// 写入，无法构造权限失败，跳过。
+func TestAtomicWriteFallsBackToTempDirWhenTargetDirNotWritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires non-root: chmod 0500 does not block root")
+	}
+	base := t.TempDir()
+	etcDir := filepath.Join(base, "etc")
+	if err := os.Mkdir(etcDir, 0o700); err != nil {
+		t.Fatalf("mkdir etc: %v", err)
+	}
+	hostsPath := filepath.Join(etcDir, "hosts")
+	writeHostsFile(t, hostsPath, "127.0.0.1 localhost\n")
+	// 写入完成后再收权限，模拟 /etc 对普通用户只读
+	if err := os.Chmod(etcDir, 0o500); err != nil {
+		t.Fatalf("chmod etc: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(etcDir, 0o700) })
+
+	w := testWriter(t, hostsPath, filepath.Join(base, "backups"), nil)
+	mover := &recordMover{}
+	w.SetMover(mover)
+
+	if err := w.atomicWrite([]byte("new content\n")); err != nil {
+		t.Fatalf("atomicWrite: %v", err)
+	}
+	if mover.tempPath == "" {
+		t.Fatal("mover was not called")
+	}
+	if filepath.Dir(mover.tempPath) == etcDir {
+		t.Errorf("temp staged inside unwritable target dir: %s", mover.tempPath)
+	}
+	if mover.target != hostsPath {
+		t.Errorf("target = %q, want %q", mover.target, hostsPath)
+	}
+	if _, err := os.Stat(mover.tempPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("staged temp file not cleaned up: %v", err)
+	}
+}

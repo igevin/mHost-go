@@ -3,6 +3,7 @@ package hostssvc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	app "github.com/igevin/mHost-go/internal/app"
+	"github.com/igevin/mHost-go/internal/elevate"
 	"github.com/igevin/mHost-go/internal/hostsfile"
 	"github.com/igevin/mHost-go/internal/storage"
 )
@@ -468,5 +470,49 @@ func TestPreviewCurrentBlockReflectsExisting(t *testing.T) {
 	}
 	if plan.CurrentBlock != "# ---- mHost start ----\n9.9.9.9 legacy.com\n# ---- mHost end ----\n" {
 		t.Fatalf("current block = %q", plan.CurrentBlock)
+	}
+}
+
+// failAlwaysMover 每次 Move 都返回固定错误（提权取消/失败场景）。
+type failAlwaysMover struct{ err error }
+
+func (m failAlwaysMover) Move(_, _ string) error { return m.err }
+
+// TestApplyCanceledAuthorization 验证管理员授权被取消时的分类：
+// 不是可重试的 ErrorWrite，而是 ErrorPermission + "未改动"语义，
+// 回执里 managed_block 为 WriteSkipped（备份照旧生成，与源项目一致）。
+func TestApplyCanceledAuthorization(t *testing.T) {
+	env := newTestEnv(t, "127.0.0.1 keep.me\n", cleanProfile())
+
+	writer := hostsfile.NewSystemWriter(env.hostsPath, env.backupDir, env.volume)
+	writer.SetMover(failAlwaysMover{err: fmt.Errorf("%w: osascript exit status 1", elevate.ErrCanceled)})
+	svc := New(env.root, env.hostsPath, env.backupDir, env.volume, WithWriter(writer))
+
+	plan, err := svc.PreviewApply(context.Background(), cleanProfile().ID, nil)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	receipt, err := svc.Apply(context.Background(), plan.ID, nil)
+	var uiErr *app.UIError
+	if !errors.As(err, &uiErr) {
+		t.Fatalf("Apply() = %v, want UIError", err)
+	}
+	if uiErr.Kind != app.ErrorPermission {
+		t.Fatalf("kind = %v, want ErrorPermission", uiErr.Kind)
+	}
+	if uiErr.Retryable {
+		t.Fatal("canceled authorization must not be retryable")
+	}
+	var managed *app.ApplyResult
+	for i := range receipt.Results {
+		if receipt.Results[i].Entity == "managed_block" {
+			managed = &receipt.Results[i]
+		}
+	}
+	if managed == nil || managed.Status != app.WriteSkipped {
+		t.Fatalf("managed_block result = %+v, want WriteSkipped", managed)
+	}
+	if got := readHosts(t, env); got != "127.0.0.1 keep.me\n" {
+		t.Fatalf("hosts changed after cancel: %q", got)
 	}
 }

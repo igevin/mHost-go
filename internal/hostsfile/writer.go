@@ -35,7 +35,8 @@ type Volume interface {
 }
 
 // Mover 把临时文件落到系统 hosts 路径。生产实现为同盘 rename；
-// 需要提权的平台可在 #6 替换为 privileged helper（源项目 elevated_move）。
+// darwin 默认 PrivilegedMover（rename 失败后请求管理员授权，
+// 对应源项目 elevated_move）。
 type Mover interface {
 	Move(tempPath, target string) error
 }
@@ -107,7 +108,7 @@ func NewSystemWriter(hostsPath, backupDir string, volume Volume, opts ...WriterO
 		hostsPath:  hostsPath,
 		backupDir:  backupDir,
 		volume:     volume,
-		mover:      RenameMover{},
+		mover:      defaultMover(),
 		flusher:    NoopFlusher{},
 		now:        func() time.Time { return time.Now().UTC() },
 		newID:      newWriterID,
@@ -250,12 +251,20 @@ func (w *SystemWriter) ensureRegularFile() error {
 }
 
 // atomicWrite 临时文件 + Mover 落位（源项目 tempfile + elevated_move）。
-// 临时文件创建在目标同目录，rename 天然原子；失败时目标保持原样。
+// 临时文件创建在目标同目录，rename 天然原子；目标目录不可写（如
+// /etc）时回落到用户临时目录暂存，由平台 Mover（darwin 提权安装）
+// 负责落位。失败时目标保持原样。
 func (w *SystemWriter) atomicWrite(content []byte) error {
 	dir := filepath.Dir(w.hostsPath)
 	tmp, err := os.CreateTemp(dir, ".mhost-hosts-*")
 	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+		if !os.IsPermission(err) {
+			return fmt.Errorf("create temp file: %w", err)
+		}
+		tmp, err = os.CreateTemp("", ".mhost-hosts-*")
+		if err != nil {
+			return fmt.Errorf("create temp file: %w", err)
+		}
 	}
 	tmpPath := tmp.Name()
 	// 清理兜底：Move 成功后文件已不存在，Remove 忽略 not-exist。

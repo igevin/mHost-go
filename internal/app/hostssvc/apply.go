@@ -13,6 +13,7 @@ import (
 	"time"
 
 	app "github.com/igevin/mHost-go/internal/app"
+	"github.com/igevin/mHost-go/internal/elevate"
 	"github.com/igevin/mHost-go/internal/hostsfile"
 	"github.com/igevin/mHost-go/internal/storage"
 )
@@ -188,7 +189,8 @@ func (s *Service) Apply(ctx context.Context, planID string, resolutions map[stri
 }
 
 // applyFailureReceipt 把 writer 错误按哨兵类型分类为回执 + UIError。
-// 写入失败：原块保留；验证失败：writer 已自动回滚；备份失败：未触碰系统。
+// 授权取消：未触碰系统；写入失败：原块保留；验证失败：writer 已自动
+// 回滚；备份失败：未触碰系统。
 func (s *Service) applyFailureReceipt(receipt app.ApplyReceipt, err error) (app.ApplyReceipt, error) {
 	message := err.Error()
 	switch {
@@ -201,6 +203,16 @@ func (s *Service) applyFailureReceipt(receipt app.ApplyReceipt, err error) (app.
 			}},
 		)
 		return receipt, &app.UIError{Kind: app.ErrorReadback, Message: "Readback verification failed after applying", Detail: message, Cause: err}
+	case errors.Is(err, elevate.ErrCanceled):
+		// 用户在管理员授权框取消：系统 hosts 未被触碰，与写失败区分。
+		receipt.Results = append(receipt.Results,
+			app.ApplyResult{Entity: "managed_block", Status: app.WriteSkipped, Issue: &app.StorageIssue{
+				Code: "authorization_canceled", Severity: app.SeverityWarning,
+				Message: "Administrator authorization was canceled; the system hosts was not changed", Recoverable: true,
+			}},
+			app.ApplyResult{Entity: "verification", Status: app.WriteSkipped},
+		)
+		return receipt, &app.UIError{Kind: app.ErrorPermission, Message: "Administrator authorization was canceled; the system hosts was not changed", Cause: err}
 	case errors.Is(err, hostsfile.ErrBackup):
 		receipt.Results = append(receipt.Results,
 			app.ApplyResult{Entity: "backup", Status: app.WriteFailed, Issue: &app.StorageIssue{
