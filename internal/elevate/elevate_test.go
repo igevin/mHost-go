@@ -31,9 +31,11 @@ func TestInstallScriptQuoting(t *testing.T) {
 				`/bin/chmod 644 '/etc/hosts.mhost-new'`,
 				`/bin/mv -f '/etc/hosts.mhost-new' '/etc/hosts'`,
 				// 刷新只在落位成功后执行，且失败不影响退出码
-				"dscacheutil -flushcache || true",
-				"killall -HUP mDNSResponder || true",
+				"/usr/bin/dscacheutil -flushcache || true",
+				"/usr/bin/killall -HUP mDNSResponder || true",
 				"exit 0",
+				// 主分支失败后降级：先确认源可读再截断写既有文件
+				"elif /bin/test -r '/var/folders/ab/.mhost-hosts-1' && /bin/cat '/var/folders/ab/.mhost-hosts-1' > '/etc/hosts'; then",
 				// 失败路径清理暂存文件并以非零退出
 				`/bin/rm -f '/etc/hosts.mhost-new'`,
 				"exit 1",
@@ -77,11 +79,15 @@ func TestInstallScriptQuoting(t *testing.T) {
 					t.Errorf("script missing %q:\n%s", want, script)
 				}
 			}
-			// 结构不变量：mv 必须在刷新之前（刷新不能阻塞或截断落位）
+			// 结构不变量：mv 必须在刷新之前（刷新不能阻塞或截断落位），
+			// 且主/降级两条成功分支各带一次刷新
 			mv := strings.Index(script, "/bin/mv -f")
-			flush := strings.Index(script, "dscacheutil")
+			flush := strings.Index(script, "/usr/bin/dscacheutil")
 			if mv < 0 || flush < 0 || flush < mv {
 				t.Errorf("flush must come after mv:\n%s", script)
+			}
+			if got := strings.Count(script, "dscacheutil -flushcache"); got != 2 {
+				t.Errorf("flush blocks = %d, want 2 (primary + fallback):\n%s", got, script)
 			}
 		})
 	}

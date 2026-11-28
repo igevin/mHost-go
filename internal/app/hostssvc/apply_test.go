@@ -546,3 +546,35 @@ func TestApplyAuthFailed(t *testing.T) {
 		t.Fatalf("hosts changed after auth failure: %q", got)
 	}
 }
+
+// TestRollbackCanceledAuthorization 验证回滚路径复用提权哨兵分类：
+// 取消授权 → ErrorPermission 且不可重试，hosts 保持回滚前内容。
+func TestRollbackCanceledAuthorization(t *testing.T) {
+	env := newTestEnv(t, "127.0.0.1 keep.me\n", cleanProfile())
+
+	plan, err := env.service.PreviewApply(context.Background(), cleanProfile().ID, nil)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	receipt, err := env.service.Apply(context.Background(), plan.ID, nil)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	afterApply := readHosts(t, env)
+
+	env.service.writer.SetMover(failAlwaysMover{err: fmt.Errorf("%w: osascript exit status 1", elevate.ErrCanceled)})
+	_, err = env.service.Rollback(context.Background(), receipt.RollbackRef.ID)
+	var uiErr *app.UIError
+	if !errors.As(err, &uiErr) {
+		t.Fatalf("Rollback() = %v, want UIError", err)
+	}
+	if uiErr.Kind != app.ErrorPermission {
+		t.Fatalf("kind = %v, want ErrorPermission", uiErr.Kind)
+	}
+	if uiErr.Retryable {
+		t.Fatal("canceled authorization must not be retryable")
+	}
+	if got := readHosts(t, env); got != afterApply {
+		t.Fatalf("hosts changed after canceled rollback: %q", got)
+	}
+}

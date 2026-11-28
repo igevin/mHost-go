@@ -17,6 +17,10 @@ type PrivilegedMover struct{}
 func (PrivilegedMover) Move(tempPath, target string) error {
 	if err := os.Rename(tempPath, target); err == nil {
 		return nil
+	} else if !os.IsPermission(err) {
+		// 非权限类失败（跨设备、源缺失等）提权同样救不了，
+		// 直接返回，避免无谓的密码弹窗。
+		return err
 	}
 	return elevate.Install(tempPath, target)
 }

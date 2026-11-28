@@ -23,27 +23,38 @@ var (
 // Runner 执行外部命令并返回合并输出，生产实现为 exec.Command。
 type Runner func(name string, args ...string) ([]byte, error)
 
-// InstallScript 构造提权安装的 AppleScript。三段式保证安全语义：
+// InstallScript 构造提权安装的 AppleScript。落位优先原子替换，并带
+// 截断写降级：
 //  1. root 在目标同目录写 target.mhost-new（目标全程不被触碰，
-//     绝无半截文件窗口）；
-//  2. chmod 保留原权限位后 mv 原子覆盖；
+//     绝无半截文件窗口），chmod 保留原权限位后 mv 原子覆盖；
+//  2. 主分支失败时降级为截断写既有文件（先 test -r 源，避免源不可读
+//     时把目标截成空文件）：/etc 不在 SIP 保护集（/System、/usr、
+//     /bin、/sbin 及带 restricted 标志的文件），root 新建通常可行，
+//     此分支兜底 MDM 等给目录加 restricted 标志的极端环境；
 //  3. DNS 刷新只在落位成功分支执行，且失败不影响退出码
 //     （与 writer 的 Flusher 语义一致：刷新尽力而为）；
-//     落位失败则清理暂存文件并以非零退出，交由调用方走错误路径。
+//     全部失败则清理暂存文件并以非零退出，交由调用方走错误路径。
 //
 // 两级转义：shell 层单引号包裹（内嵌单引号按 '\” 惯例），
 // AppleScript 层反斜杠与双引号翻倍。
 func InstallScript(src, target string, mode fs.FileMode) string {
 	staged := target + ".mhost-new"
+	flush := "/usr/bin/dscacheutil -flushcache || true\n/usr/bin/killall -HUP mDNSResponder || true"
 	shell := fmt.Sprintf("if /bin/cat %s > %s && /bin/chmod %o %s && /bin/mv -f %s %s; then\n"+
-		"dscacheutil -flushcache || true\n"+
-		"killall -HUP mDNSResponder || true\n"+
+		"%s\n"+
+		"exit 0\n"+
+		"elif /bin/test -r %s && /bin/cat %s > %s; then\n"+
+		"%s\n"+
 		"exit 0\n"+
 		"else\n"+
 		"/bin/rm -f %s\n"+
 		"exit 1\nfi",
 		shellQuote(src), shellQuote(staged), mode.Perm(), shellQuote(staged),
-		shellQuote(staged), shellQuote(target), shellQuote(staged))
+		shellQuote(staged), shellQuote(target),
+		flush,
+		shellQuote(src), shellQuote(src), shellQuote(target),
+		flush,
+		shellQuote(staged))
 	return `do shell script "` + applescriptEscape(shell) + `" with administrator privileges`
 }
 

@@ -267,6 +267,14 @@ func (s *Service) Rollback(ctx context.Context, backupID string) (app.ApplyRecei
 		if errors.As(err, &uiErr) {
 			return app.ApplyReceipt{}, uiErr
 		}
+		// 回滚同样可能弹管理员授权框：取消/密码错误与"回滚失败"区分，
+		// 语义与 Apply 的 applyFailureReceipt 一致（hosts 未被改动）。
+		if errors.Is(err, elevate.ErrCanceled) {
+			return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorPermission, Message: "Administrator authorization was canceled; rollback did not run", Cause: err}
+		}
+		if errors.Is(err, elevate.ErrAuthFailed) {
+			return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorPermission, Message: "Administrator authorization failed; rollback did not run. Check the password and try again", Retryable: true, Cause: err}
+		}
 		return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorBackup, Message: "Rollback failed", Detail: err.Error(), Cause: err}
 	}
 
