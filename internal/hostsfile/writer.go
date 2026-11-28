@@ -257,6 +257,7 @@ func (w *SystemWriter) ensureRegularFile() error {
 func (w *SystemWriter) atomicWrite(content []byte) error {
 	dir := filepath.Dir(w.hostsPath)
 	tmp, err := os.CreateTemp(dir, ".mhost-hosts-*")
+	stagedInTarget := true
 	if err != nil {
 		if !os.IsPermission(err) {
 			return fmt.Errorf("create temp file: %w", err)
@@ -265,17 +266,23 @@ func (w *SystemWriter) atomicWrite(content []byte) error {
 		if err != nil {
 			return fmt.Errorf("create temp file: %w", err)
 		}
+		stagedInTarget = false
 	}
 	tmpPath := tmp.Name()
 	// 清理兜底：Move 成功后文件已不存在，Remove 忽略 not-exist。
 	defer func() { _ = os.Remove(tmpPath) }()
 
-	// 保留原文件权限位（rename 替换 inode 后会丢失原 mode）
-	if info, err := os.Stat(w.hostsPath); err == nil {
-		_ = tmp.Chmod(info.Mode().Perm())
-	} else {
-		_ = tmp.Chmod(0o644)
+	// 权限位：目标同目录暂存沿用原文件权限（rename 替换 inode 后
+	// 不丢 mode）；回落到用户 TMPDIR 的暂存只给 0600，避免其他本地
+	// 用户读到 hosts 内容副本（提权安装时 chmod 以目标原权限为准）。
+	perm := fs.FileMode(0o600)
+	if stagedInTarget {
+		perm = 0o644
+		if info, err := os.Stat(w.hostsPath); err == nil {
+			perm = info.Mode().Perm()
+		}
 	}
+	_ = tmp.Chmod(perm)
 	if _, err := tmp.Write(content); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write temp file: %w", err)

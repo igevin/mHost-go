@@ -213,6 +213,16 @@ func (s *Service) applyFailureReceipt(receipt app.ApplyReceipt, err error) (app.
 			app.ApplyResult{Entity: "verification", Status: app.WriteSkipped},
 		)
 		return receipt, &app.UIError{Kind: app.ErrorPermission, Message: "Administrator authorization was canceled; the system hosts was not changed", Cause: err}
+	case errors.Is(err, elevate.ErrAuthFailed):
+		// 密码错误等授权失败：hosts 未被触碰，修正密码后可重试。
+		receipt.Results = append(receipt.Results,
+			app.ApplyResult{Entity: "managed_block", Status: app.WriteSkipped, Issue: &app.StorageIssue{
+				Code: "authorization_failed", Severity: app.SeverityWarning,
+				Message: "Administrator authorization failed; the system hosts was not changed", Recoverable: true,
+			}},
+			app.ApplyResult{Entity: "verification", Status: app.WriteSkipped},
+		)
+		return receipt, &app.UIError{Kind: app.ErrorPermission, Message: "Administrator authorization failed; the system hosts was not changed. Check the password and try again", Retryable: true, Cause: err}
 	case errors.Is(err, hostsfile.ErrBackup):
 		receipt.Results = append(receipt.Results,
 			app.ApplyResult{Entity: "backup", Status: app.WriteFailed, Issue: &app.StorageIssue{

@@ -22,8 +22,8 @@
 - [ ] 保存解析错误内容被拒绝并逐行给出原因
 - [ ] Apply… 预览显示管理块 diff；有冲突时必须选择保留 IP 才能继续
 - [ ] Apply 后 `/etc/hosts` 管理块（`# ---- mHost start ----`）内容与预览一致，块外内容未变
-- [ ] 回执区显示 backup / managed_block / verification 三项，verification readback 为 true
-- [ ] 未提权环境下 Apply 失败且原 `/etc/hosts` 不变（错误信息可见）
+- [ ] Apply/Rollback 弹出系统管理员密码框；输入密码后 `/etc/hosts` 管理块写入成功，回执三项齐全且 verification readback 为 true
+- [ ] 在密码框点取消：hosts 不变，回执显示"授权已取消"（非可重试错误）
 - [ ] 回滚后 `/etc/hosts` 恢复为应用前内容，Header 应用态跟随变化
 - [ ] 外部改动管理块后，Header 显示 Drifted
 
@@ -53,5 +53,5 @@
 
 ## 已知限制（验证时不必当 bug 上报）
 
-- 写 `/etc/hosts` 需要授权：未提权时 Apply 以错误回执失败（#6 提权 helper 后续接入）
+- 提权走系统管理员密码框（osascript），每次 Apply/Rollback 弹一次（#30 起已接入）
 - 快照创建/恢复未开放；DNS/AdBlock 未开放

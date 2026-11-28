@@ -516,3 +516,33 @@ func TestApplyCanceledAuthorization(t *testing.T) {
 		t.Fatalf("hosts changed after cancel: %q", got)
 	}
 }
+
+// TestApplyAuthFailed 验证密码错误（ErrAuthFailed）与取消的区分：
+// hosts 同样未改动、managed_block=WriteSkipped，但 UIError 可重试，
+// 提示用户检查密码再试。
+func TestApplyAuthFailed(t *testing.T) {
+	env := newTestEnv(t, "127.0.0.1 keep.me\n", cleanProfile())
+
+	writer := hostsfile.NewSystemWriter(env.hostsPath, env.backupDir, env.volume)
+	writer.SetMover(failAlwaysMover{err: fmt.Errorf("%w: (-60005)", elevate.ErrAuthFailed)})
+	svc := New(env.root, env.hostsPath, env.backupDir, env.volume, WithWriter(writer))
+
+	plan, err := svc.PreviewApply(context.Background(), cleanProfile().ID, nil)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	_, err = svc.Apply(context.Background(), plan.ID, nil)
+	var uiErr *app.UIError
+	if !errors.As(err, &uiErr) {
+		t.Fatalf("Apply() = %v, want UIError", err)
+	}
+	if uiErr.Kind != app.ErrorPermission {
+		t.Fatalf("kind = %v, want ErrorPermission", uiErr.Kind)
+	}
+	if !uiErr.Retryable {
+		t.Fatal("auth failure should be retryable (re-enter password)")
+	}
+	if got := readHosts(t, env); got != "127.0.0.1 keep.me\n" {
+		t.Fatalf("hosts changed after auth failure: %q", got)
+	}
+}

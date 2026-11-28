@@ -32,7 +32,7 @@
 2. 读当前全量内容。
 3. 写前备份（`createBackup`，失败即中止，hosts 不变）。
 4. `BuildHostsContent`：有块按字节区间原位替换，无块末尾追加，空规则移除块；块外内容逐字节保留。
-5. 原子写：目标同目录临时文件（保留原权限位）+ `Mover.Move`。生产 `Mover` 为同盘 rename；提权平台在 #6 替换实现（对应源项目 `elevated_move`）。
+5. 原子写：目标同目录临时文件（保留原权限位）+ `Mover.Move`；目标目录不可写（如 /etc）时临时文件回落用户临时目录。非 darwin 平台 `Mover` 为同盘 rename；darwin 默认 `PrivilegedMover`（rename 优先，失败经 `internal/elevate` 请求管理员授权，对应源项目 `elevated_move`，#30 接入）。
 6. `Flusher.FlushDNS`：失败不致命（源项目行为）。
 7. 读回验证（`verify`）：块存在性 + 每个 `ip domain` 行存在于块内（存在性检查，不拒绝多余行，与源项目一致）。
 8. 验证失败 → 从备份自动恢复并再次读回比对；回滚也失败时返回合并错误。
@@ -66,6 +66,6 @@ Go 侧 `internal/hostsfile/diff_rust_test.go` 对每份语料解析并语义比�
 
 ## 已知限制
 
-- 写真实 `/etc/hosts` 需要 root；非提权环境下 Apply 会以 `ErrorWrite` 失败且原文件不变（安全语义正确）。提权 helper 归 #6。
+- 写真实 `/etc/hosts` 的提权已接入：darwin 默认 `PrivilegedMover` 经 `internal/elevate` 弹管理员授权框（#30）；非 darwin 平台仍需 root，Apply 会以 `ErrorWrite` 失败且原文件不变（安全语义正确）。
 - 进程重启后内存中的 PreviewPlan 失效（需重新预览），与 demo 语义一致。
 - `PreviewApply` 无独立的解析错误入口（Save 已拒绝错误文本）；从 v1 迁移上来的 profile 若含脏数据，在迁移层（#14）已被拦截。
