@@ -672,3 +672,131 @@ func TestAlphaHistoryPageRendersBackupsAndRestoreDialog(t *testing.T) {
 		t.Fatalf("hosts still managed after restore: %q", content)
 	}
 }
+
+// #37：辅助页面——Apply/Rollback 后缓存失效、System Hosts 只读浏览
+// （行号/管理块标记/跳转/复制）、Settings 页收敛为 Data。
+
+func TestAlphaReceiptInvalidatesAuxCaches(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	applyFirstProfile(t, svc)
+
+	model := newSyncAlphaModel(t, svc)
+	model.LoadSystemHosts(context.Background())
+	model.LoadBackupCount(context.Background())
+	if !model.systemHostsLoaded || !model.backupCountLoaded {
+		t.Fatal("caches should be loaded")
+	}
+
+	// 模拟主页面写操作完成（workbench 回执 OperationID 变化）
+	model.Hosts.Receipt = &app.ApplyReceipt{OperationID: "op-invalidates"}
+	model.invalidateOnNewReceipt()
+	if model.systemHostsLoaded || model.backupCountLoaded || model.historyLoaded {
+		t.Fatal("apply/receipt must invalidate system hosts, backup count and history caches")
+	}
+
+	// 同一回执不重复失效；重新加载后保持
+	model.LoadSystemHosts(context.Background())
+	model.LoadBackupCount(context.Background())
+	model.invalidateOnNewReceipt()
+	if !model.systemHostsLoaded || !model.backupCountLoaded {
+		t.Fatal("same receipt op must not invalidate again")
+	}
+}
+
+func TestAlphaSystemHostsViewerMarksManagedBlock(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	applyFirstProfile(t, svc)
+
+	model := newSyncAlphaModel(t, svc)
+	model.LoadSystemHosts(context.Background())
+	if model.systemHostsErr != nil {
+		t.Fatalf("load: %v", model.systemHostsErr)
+	}
+	viewer := model.systemHostsViewer
+	if viewer == nil {
+		t.Fatal("system hosts viewer missing")
+	}
+	if !viewer.ReadOnly {
+		t.Fatal("system hosts viewer must be read only")
+	}
+	if !strings.Contains(viewer.Buffer.String(), "mHost start") {
+		t.Fatalf("viewer content = %q", viewer.Buffer.String())
+	}
+	marks := viewer.Diagnostics()
+	if len(marks) != 1 || marks[0].Message != "mHost managed block" {
+		t.Fatalf("managed block marks = %+v", marks)
+	}
+	if model.systemHostsReadAt.IsZero() {
+		t.Fatal("last read time missing")
+	}
+}
+
+func TestAlphaSystemHostsJumpTarget(t *testing.T) {
+	content := "127.0.0.1 keep.me\n# ---- mHost start ----\n9.9.9.9 legacy.com\n# ---- mHost end ----\ntail.line\n"
+	if got := managedBlockBounds(content); got != 1 {
+		t.Fatalf("managed block line = %d, want 1", got)
+	}
+	if got := managedBlockBounds("no block\n"); got != -1 {
+		t.Fatalf("managed block line = %d, want -1", got)
+	}
+}
+
+func TestAlphaSystemHostsRefreshReloads(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+
+	model := newSyncAlphaModel(t, svc)
+	model.LoadSystemHosts(context.Background())
+	if strings.Contains(model.systemHosts, "mHost start") {
+		t.Fatalf("unexpected block before apply: %q", model.systemHosts)
+	}
+
+	applyFirstProfile(t, svc)
+	model.RefreshSystemHosts()
+	if !model.systemHostsLoaded {
+		t.Fatal("refresh should reload system hosts")
+	}
+	if !strings.Contains(model.systemHosts, "mHost start") {
+		t.Fatalf("stale content after refresh: %q", model.systemHosts)
+	}
+}
+
+func TestAlphaDataTabReplacesSettings(t *testing.T) {
+	if alphaNavTabs[3] != "Data" {
+		t.Fatalf("nav tabs = %v, want Data at index 3", alphaNavTabs)
+	}
+}
+
+// TestAlphaSystemHostsPageRendersReadOnlyViewer 渲染冒烟：只读浏览器、
+// 管理块标记说明、跳转与复制入口都出帧。
+func TestAlphaSystemHostsPageRendersReadOnlyViewer(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	applyFirstProfile(t, svc)
+	model := newSyncAlphaModel(t, svc)
+
+	tester := ui.NewTester(model.View, 1120, 760)
+	model.SelectedNav = 2
+	tester.Frame()
+	for _, want := range []string{"System Hosts", "mHost managed block at line 2", "Jump to Managed Block", "Copy All", "Refresh"} {
+		if !tester.HasText(want) {
+			t.Fatalf("text %q missing: %q", want, tester.Texts())
+		}
+	}
+}
+
+// TestAlphaDataPageRendersPathsAndCount 渲染冒烟：Data 页展示数据目录、
+// 系统 hosts 路径与备份计数（含复制入口）。
+func TestAlphaDataPageRendersPathsAndCount(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	applyFirstProfile(t, svc)
+	model := newSyncAlphaModel(t, svc)
+	model.Boot = &alphaboot.Result{Service: svc, DataDir: "/tmp/mhost-data", HostsPath: "/tmp/mhost-hosts"}
+
+	tester := ui.NewTester(model.View, 1120, 760)
+	model.SelectedNav = 3
+	tester.Frame()
+	for _, want := range []string{"Data", "Data directory", "/tmp/mhost-data", "System hosts", "/tmp/mhost-hosts", "Apply backups: 1", "Copy"} {
+		if !tester.HasText(want) {
+			t.Fatalf("text %q missing: %q", want, tester.Texts())
+		}
+	}
+}
