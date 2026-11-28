@@ -36,7 +36,7 @@ Phase 1 由 #13（UI 与契约）和 #14（真实存储）共同交付：主入�
 
 ## 下一阶段：Phase 2
 
-Phase 2 的 UI 部分由 #16 交付：MyGo Hosts Rewrite Workbench、行内诊断、Save/Apply 显式分离、staged 预览、常驻回执、回滚、草稿保护与 UI 测试，全部基于内存 Demo Service（`internal/app/demo.HostsService`），不碰真实 `/etc/hosts`；通过 `MHOST_WORKBENCH=hosts` 启动。
+Phase 2 的 UI 部分由 #16 交付：MyGo Hosts Rewrite Workbench、行内诊断、保存与应用流程、staged 预览、常驻回执、回滚、草稿保护与 UI 测试，全部基于内存 Demo Service（`internal/app/demo.HostsService`），不碰真实 `/etc/hosts`；通过 `MHOST_WORKBENCH=hosts` 启动。当前产品化交互（#32 起）允许 Apply… 先保存未保存草稿，再进入预览与最终确认。
 
 后续交付：
 

@@ -46,8 +46,8 @@ type HostsWorkbenchModel struct {
 	Receipt     *app.ApplyReceipt
 	Problem     *app.UIError
 
-	PendingSwitch string
 	PendingDelete string
+	PendingQuit   bool
 	QuitRequested bool
 	DemoMode      bool
 	Chromeless    bool // Alpha 壳嵌入时隐藏自身标题栏（壳已有导航头）
@@ -68,6 +68,9 @@ type HostsWorkbenchModel struct {
 	closed            atomic.Bool
 	findBar           *editor.FindBar
 	diagnosticVersion uint64
+	savedForPreview   bool // Apply… 刚自动保存了草稿；取消预览时需说明系统未变
+	quitDiscard       bool // 用户明确选择不保存退出；允许框架后续 quit 事件
+	quitAfterSaveAll  bool
 }
 
 func NewHostsWorkbenchModel(service app.HostsService) *HostsWorkbenchModel {
@@ -136,28 +139,11 @@ func (m *HostsWorkbenchModel) SelectProfile(profileID string) {
 	if m.busy() || profileID == "" || profileID == m.SelectedID {
 		return
 	}
-	if m.Modified() {
-		m.PendingSwitch = profileID
-		return
-	}
+	// 草稿按 Profile 保存在内存中，切换本身不丢数据；不需要确认打断。
 	m.switchToProfile(profileID)
 }
 
-func (m *HostsWorkbenchModel) ConfirmSwitch() {
-	if m.PendingSwitch == "" {
-		return
-	}
-	target := m.PendingSwitch
-	m.PendingSwitch = ""
-	m.switchToProfile(target)
-}
-
-func (m *HostsWorkbenchModel) CancelSwitch() {
-	m.PendingSwitch = ""
-}
-
 func (m *HostsWorkbenchModel) switchToProfile(profileID string) {
-	m.PendingSwitch = ""
 	if draft, ok := m.drafts[profileID]; ok {
 		m.presentDraft(profileID, draft)
 		return
@@ -189,6 +175,7 @@ func (m *HostsWorkbenchModel) presentDraft(profileID string, draft *hostsDraft) 
 	m.Staged = nil
 	m.PlanStale = false
 	m.Resolutions = map[string]string{}
+	m.savedForPreview = false
 	m.Editor.ReadOnly = m.profileProtected(profileID)
 	m.Editor.Buffer.Reset(draft.content)
 	m.diagnosticVersion = 0
@@ -263,7 +250,73 @@ func (m *HostsWorkbenchModel) Save() {
 	})
 }
 
+// StartApply 是 Apply… 按钮入口：未修改时直接预览；有草稿时先保存，
+// 保存成功后再进入同一个预览流程。系统改写仍必须经过预览和最终确认。
+func (m *HostsWorkbenchModel) StartApply() {
+	if m.busy() || m.SelectedID == "" {
+		return
+	}
+	if !m.Modified() {
+		m.PreviewApply()
+		return
+	}
+	m.saveDraftThenPreviewApply()
+}
+
+func (m *HostsWorkbenchModel) saveDraftThenPreviewApply() {
+	draft := m.currentDraft()
+	if m.busy() || draft == nil || !m.Modified() {
+		return
+	}
+	id, ctx := m.beginOperation()
+	m.Phase = HostsPhaseApplying
+	m.Problem = nil
+	profileID := m.SelectedID
+	content := draft.content
+	revision := draft.revision
+	m.runAsync(func() {
+		detail, err := m.Service.SaveProfile(ctx, profileID, content, revision)
+		if err != nil {
+			m.dispatchError(id, "save", err)
+			return
+		}
+		m.dispatch(func() {
+			if !m.current(id) {
+				return
+			}
+			draft.savedContent = detail.Content
+			draft.revision = detail.Revision
+		})
+		m.refreshProfilesThenPreview(id, ctx, profileID)
+	})
+}
+
+// refreshProfilesThenPreview 在 worker 侧刷新列表，再在主线程生成预览；
+// 刷新失败不得继续预览。
+func (m *HostsWorkbenchModel) refreshProfilesThenPreview(id uint64, ctx context.Context, profileID string) {
+	profiles, err := m.Service.ListProfiles(ctx)
+	m.dispatch(func() {
+		if !m.current(id) {
+			return
+		}
+		if err != nil {
+			m.setError("refresh_profiles", err)
+			return
+		}
+		m.Profiles = profiles
+		m.Phase = HostsPhaseIdle
+		m.finishOperation()
+		if m.SelectedID == profileID {
+			m.previewApply(true)
+		}
+	})
+}
+
 func (m *HostsWorkbenchModel) PreviewApply() {
+	m.previewApply(false)
+}
+
+func (m *HostsWorkbenchModel) previewApply(savedForPreview bool) {
 	if m.busy() || m.SelectedID == "" || m.Modified() {
 		return
 	}
@@ -282,11 +335,13 @@ func (m *HostsWorkbenchModel) PreviewApply() {
 				return
 			}
 			if err != nil {
+				m.savedForPreview = false
 				m.setError("preview_apply", err)
 				return
 			}
 			m.Staged = &plan
 			m.PlanStale = false
+			m.savedForPreview = savedForPreview
 			// Keep choices made while this preview was in flight: only fill
 			// domains the user has not chosen since.
 			for domain, ip := range resolutions {
@@ -304,9 +359,13 @@ func (m *HostsWorkbenchModel) CancelStaged() {
 	if m.busy() {
 		return
 	}
+	if m.savedForPreview {
+		m.Info = "Profile saved · system hosts unchanged"
+	}
 	m.Staged = nil
 	m.PlanStale = false
 	m.Resolutions = map[string]string{}
+	m.savedForPreview = false
 }
 
 func (m *HostsWorkbenchModel) ChooseResolution(domain, ip string) {
@@ -315,8 +374,10 @@ func (m *HostsWorkbenchModel) ChooseResolution(domain, ip string) {
 	}
 	m.Resolutions[domain] = ip
 	// Re-render the preview so the staged diff matches what Apply will write.
+	// Keep the auto-save marker: canceling after a resolution choice must still
+	// explain that the profile was saved while system hosts stayed unchanged.
 	if !m.busy() && !m.Modified() {
-		m.PreviewApply()
+		m.previewApply(m.savedForPreview)
 	}
 }
 
@@ -354,6 +415,7 @@ func (m *HostsWorkbenchModel) Apply() {
 	m.Staged = nil
 	m.PlanStale = false
 	m.Resolutions = map[string]string{}
+	m.savedForPreview = false
 	id, ctx := m.beginOperation()
 	m.Phase = HostsPhaseApplying
 	m.Problem = nil
@@ -442,9 +504,24 @@ func (m *HostsWorkbenchModel) refreshApplied(id uint64, ctx context.Context) {
 	m.refreshProfiles(id, ctx)
 }
 
+// RequestQuit 在真正可能丢失草稿时改为展示选择框。写入中的 Apply 仍按
+// 原安全门禁等待；写入完成后若仍有未保存草稿，再展示选择而不是自动退出。
 func (m *HostsWorkbenchModel) RequestQuit() bool {
+	if m.quitDiscard {
+		return true
+	}
+	if m.PendingQuit {
+		return false
+	}
 	if m.Phase == HostsPhaseApplying {
 		m.QuitRequested = true
+		return false
+	}
+	if m.hasUnsavedDrafts() {
+		m.PendingQuit = true
+		if m.cancel != nil {
+			m.cancel()
+		}
 		return false
 	}
 	if m.cancel != nil {
@@ -454,7 +531,109 @@ func (m *HostsWorkbenchModel) RequestQuit() bool {
 }
 
 func (m *HostsWorkbenchModel) CancelQuit() {
+	m.PendingQuit = false
 	m.QuitRequested = false
+	m.quitAfterSaveAll = false
+}
+
+// QuitWithoutSaving 仅由退出确认框调用：用户明确放弃内存草稿后允许框架
+// 继续分发 quit 事件。
+func (m *HostsWorkbenchModel) QuitWithoutSaving() {
+	if m.busy() {
+		return
+	}
+	m.PendingQuit = false
+	m.QuitRequested = false
+	m.quitAfterSaveAll = false
+	m.quitDiscard = true
+	m.completeSafeQuit()
+}
+
+// SaveAllAndQuit 保存全部草稿；任一保存失败都保持应用打开并显示原因。
+func (m *HostsWorkbenchModel) SaveAllAndQuit() {
+	m.PendingQuit = false
+	m.quitAfterSaveAll = true
+	m.saveAllDrafts()
+}
+
+func (m *HostsWorkbenchModel) saveAllDrafts() {
+	if m.busy() || m.Service == nil {
+		m.quitAfterSaveAll = false
+		return
+	}
+	id, ctx := m.beginOperation()
+	m.Phase = HostsPhaseApplying
+	m.Problem = nil
+	m.saveNextDraft(id, ctx)
+}
+
+func (m *HostsWorkbenchModel) saveNextDraft(id uint64, ctx context.Context) {
+	for _, profile := range m.Profiles {
+		draft := m.drafts[profile.ID]
+		if draft == nil || draft.content == draft.savedContent {
+			continue
+		}
+		profileID := profile.ID
+		content := draft.content
+		revision := draft.revision
+		m.runAsync(func() {
+			detail, err := m.Service.SaveProfile(ctx, profileID, content, revision)
+			if err != nil {
+				m.dispatch(func() {
+					if m.current(id) {
+						m.quitAfterSaveAll = false
+						m.setError("save_all", err)
+					}
+				})
+				return
+			}
+			m.dispatch(func() {
+				if !m.current(id) {
+					return
+				}
+				draft.savedContent = detail.Content
+				draft.revision = detail.Revision
+			})
+			m.saveNextDraft(id, ctx)
+		})
+		return
+	}
+	m.dispatch(func() {
+		if !m.current(id) {
+			return
+		}
+		m.Phase = HostsPhaseIdle
+		m.finishOperation()
+		if m.quitAfterSaveAll {
+			m.quitAfterSaveAll = false
+			m.completeSafeQuit()
+		}
+	})
+}
+
+func (m *HostsWorkbenchModel) hasUnsavedDrafts() bool {
+	for _, draft := range m.drafts {
+		if draft.content != draft.savedContent {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *HostsWorkbenchModel) unsavedDraftCount() int {
+	count := 0
+	for _, draft := range m.drafts {
+		if draft.content != draft.savedContent {
+			count++
+		}
+	}
+	return count
+}
+
+func (m *HostsWorkbenchModel) completeSafeQuit() {
+	if m.OnSafeToQuit != nil {
+		m.OnSafeToQuit()
+	}
 }
 
 func (m *HostsWorkbenchModel) Close() error {
@@ -532,8 +711,11 @@ func (m *HostsWorkbenchModel) finishOperation() {
 	}
 	if m.QuitRequested && m.Phase != HostsPhaseApplying {
 		m.QuitRequested = false
-		if m.OnSafeToQuit != nil {
-			m.OnSafeToQuit()
+		if m.hasUnsavedDrafts() {
+			// 写入已经到达安全边界，但退出仍可能丢弃其他 Profile 的草稿。
+			m.PendingQuit = true
+			return
 		}
+		m.completeSafeQuit()
 	}
 }
