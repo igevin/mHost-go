@@ -51,7 +51,7 @@
 
 ## 已知限制
 
-- Apply 写真实 `/etc/hosts` 需 root；未提权时以 `ErrorWrite` 失败且原文件不变（#6 提权 helper）。
+- Apply/Rollback 写 `/etc/hosts` 经 macOS 管理员密码框提权（#30，`internal/elevate` + `PrivilegedMover`）；取消授权按"未改动"提示，不是可重试错误。
 - mygo 无文件对话框，导入导出为目录粒度。
 - 快照创建/恢复未开放（列表与孤儿可见性已就位）。
 - Save 文本不保留规则来源标注（Remote/AdBlock 记 Manual）。

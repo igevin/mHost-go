@@ -35,7 +35,8 @@ type Volume interface {
 }
 
 // Mover 把临时文件落到系统 hosts 路径。生产实现为同盘 rename；
-// 需要提权的平台可在 #6 替换为 privileged helper（源项目 elevated_move）。
+// darwin 默认 PrivilegedMover（rename 失败后请求管理员授权，
+// 对应源项目 elevated_move）。
 type Mover interface {
 	Move(tempPath, target string) error
 }
@@ -107,7 +108,7 @@ func NewSystemWriter(hostsPath, backupDir string, volume Volume, opts ...WriterO
 		hostsPath:  hostsPath,
 		backupDir:  backupDir,
 		volume:     volume,
-		mover:      RenameMover{},
+		mover:      defaultMover(),
 		flusher:    NoopFlusher{},
 		now:        func() time.Time { return time.Now().UTC() },
 		newID:      newWriterID,
@@ -250,23 +251,38 @@ func (w *SystemWriter) ensureRegularFile() error {
 }
 
 // atomicWrite 临时文件 + Mover 落位（源项目 tempfile + elevated_move）。
-// 临时文件创建在目标同目录，rename 天然原子；失败时目标保持原样。
+// 临时文件创建在目标同目录，rename 天然原子；目标目录不可写（如
+// /etc）时回落到用户临时目录暂存，由平台 Mover（darwin 提权安装）
+// 负责落位。失败时目标保持原样。
 func (w *SystemWriter) atomicWrite(content []byte) error {
 	dir := filepath.Dir(w.hostsPath)
 	tmp, err := os.CreateTemp(dir, ".mhost-hosts-*")
+	stagedInTarget := true
 	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+		if !os.IsPermission(err) {
+			return fmt.Errorf("create temp file: %w", err)
+		}
+		tmp, err = os.CreateTemp("", ".mhost-hosts-*")
+		if err != nil {
+			return fmt.Errorf("create temp file: %w", err)
+		}
+		stagedInTarget = false
 	}
 	tmpPath := tmp.Name()
 	// 清理兜底：Move 成功后文件已不存在，Remove 忽略 not-exist。
 	defer func() { _ = os.Remove(tmpPath) }()
 
-	// 保留原文件权限位（rename 替换 inode 后会丢失原 mode）
-	if info, err := os.Stat(w.hostsPath); err == nil {
-		_ = tmp.Chmod(info.Mode().Perm())
-	} else {
-		_ = tmp.Chmod(0o644)
+	// 权限位：目标同目录暂存沿用原文件权限（rename 替换 inode 后
+	// 不丢 mode）；回落到用户 TMPDIR 的暂存只给 0600，避免其他本地
+	// 用户读到 hosts 内容副本（提权安装时 chmod 以目标原权限为准）。
+	perm := fs.FileMode(0o600)
+	if stagedInTarget {
+		perm = 0o644
+		if info, err := os.Stat(w.hostsPath); err == nil {
+			perm = info.Mode().Perm()
+		}
 	}
+	_ = tmp.Chmod(perm)
 	if _, err := tmp.Write(content); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write temp file: %w", err)
