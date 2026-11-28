@@ -154,6 +154,10 @@ func (s *Service) Apply(ctx context.Context, planID string, resolutions map[stri
 		OperationID:     operationID,
 	}
 	backup, prevContent, writeErr := s.writer.Apply(resolved, true, meta)
+	if backup != nil {
+		// #35：补标操作结果供历史页展示；补标失败不影响主流程。
+		_ = s.writer.MarkBackupResult(backup.ID, backupResultForError(writeErr))
+	}
 	receipt := app.ApplyReceipt{OperationID: operationID, ProfileID: profile.ID}
 	if backup != nil {
 		ref := s.backupRef(backup, prevContent, storageProfileRef{ID: profile.ID, Name: profile.Name})
@@ -258,6 +262,11 @@ func (s *Service) dropPlan(planID string) {
 
 // Rollback 按备份 ID 恢复系统 hosts，并把 applied-state 还给备份时的
 // 上一个 profile。回执与 demo 形状一致。
+//
+// #35：恢复不再限于最近回执——任意历史备份都可恢复。写前生成安全
+// 备份（内容 = 当前系统 hosts，归属恢复后的 profile，Prev = 恢复前
+// 的 applied），恢复本身可经回执 RollbackRef 撤销；安全备份结果随
+// 恢复成败补标。原有语义保留：管理员授权、原子写、读回验证。
 func (s *Service) Rollback(ctx context.Context, backupID string) (app.ApplyReceipt, error) {
 	if err := ctx.Err(); err != nil {
 		return app.ApplyReceipt{}, err
@@ -266,22 +275,49 @@ func (s *Service) Rollback(ctx context.Context, backupID string) (app.ApplyRecei
 	defer s.applyMu.Unlock()
 
 	operationID := s.operation.new()
-	record, err := s.writer.RollbackTo(backupID)
+
+	record, err := s.findBackupRecord(backupID)
 	if err != nil {
+		return app.ApplyReceipt{}, err
+	}
+	current, err := s.writer.CurrentContent()
+	if err != nil {
+		return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorPermission, Message: "Cannot read the system hosts file before restoring", Detail: err.Error(), Cause: err}
+	}
+	prevState, _ := s.readAppliedState()
+
+	// 写前安全备份：恢复失败或后悔时系统状态可寻回。
+	safety, serr := s.writer.CreateBackupForProfile(current, hostsfile.BackupRecord{
+		ProfileID:       record.PrevProfileID,
+		ProfileName:     record.PrevProfileName,
+		PrevProfileID:   prevState.ProfileID,
+		PrevProfileName: prevState.ProfileName,
+		OperationID:     operationID,
+	})
+	if serr != nil {
+		return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorBackup, Message: "Backup failed; nothing was restored", Detail: serr.Error(), Retryable: true, Cause: serr}
+	}
+
+	record, err = s.writer.RollbackTo(backupID)
+	if err != nil {
+		// 恢复未完成：系统 hosts 保持原样（读回失败除外，见 writer）。
+		// 安全备份照旧保留并补标，历史页可见这次未完成的恢复。
+		_ = s.writer.MarkBackupResult(safety.ID, backupResultForError(err))
 		var uiErr *app.UIError
 		if errors.As(err, &uiErr) {
 			return app.ApplyReceipt{}, uiErr
 		}
-		// 回滚同样可能弹管理员授权框：取消/密码错误与"回滚失败"区分，
-		// 语义与 Apply 的 applyFailureReceipt 一致（hosts 未被改动）。
+		// 恢复同样可能弹管理员授权框：取消/密码错误与"恢复失败"区分，
+		// 语义与 Apply 的失败分类一致（hosts 未被改动）。
 		if errors.Is(err, elevate.ErrCanceled) {
-			return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorPermission, Message: "Administrator authorization was canceled; rollback did not run", Cause: err}
+			return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorPermission, Message: "Administrator authorization was canceled; the system hosts was not changed", Cause: err}
 		}
 		if errors.Is(err, elevate.ErrAuthFailed) {
-			return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorPermission, Message: "Administrator authorization failed; rollback did not run. Check the password and try again", Retryable: true, Cause: err}
+			return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorPermission, Message: "Administrator authorization failed; the system hosts was not changed. Check the password and try again", Retryable: true, Cause: err}
 		}
-		return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorBackup, Message: "Rollback failed", Detail: err.Error(), Cause: err}
+		return app.ApplyReceipt{}, &app.UIError{Kind: app.ErrorBackup, Message: "Restore failed", Detail: err.Error(), Retryable: true, Cause: err}
 	}
+	_ = s.writer.MarkBackupResult(safety.ID, app.BackupResultApplied)
 
 	// 恢复 applied-state：归属备份时记录的前一个 profile；
 	// 备份时无前置应用（PrevProfileID 为空且恢复后无块）则清零状态。
@@ -307,6 +343,7 @@ func (s *Service) Rollback(ctx context.Context, backupID string) (app.ApplyRecei
 	}
 
 	ref := s.backupRef(record, restored, storageProfileRef{ID: record.ProfileID, Name: record.ProfileName})
+	safetyRef := s.backupRef(safety, current, storageProfileRef{ID: safety.ProfileID, Name: safety.ProfileName})
 	return app.ApplyReceipt{
 		OperationID: operationID,
 		ProfileID:   record.PrevProfileID,
@@ -315,7 +352,37 @@ func (s *Service) Rollback(ctx context.Context, backupID string) (app.ApplyRecei
 			{Entity: "managed_block", Status: app.WriteWritten},
 			{Entity: "verification", Status: app.WriteWritten, ReadbackVerified: true},
 		},
+		RollbackRef: safetyRef, // 撤销本次恢复的安全备份
 	}, nil
+}
+
+// findBackupRecord 按 ID 定位索引中的备份记录；找不到时返回 ErrorNotFound
+// （与 demo 语义一致），索引不可读归为 ErrorBackup。
+func (s *Service) findBackupRecord(backupID string) (*hostsfile.BackupRecord, error) {
+	records, err := s.writer.ListBackups()
+	if err != nil {
+		return nil, &app.UIError{Kind: app.ErrorBackup, Message: "Cannot list apply backups", Detail: err.Error(), Cause: err}
+	}
+	for i := range records {
+		if records[i].ID == backupID {
+			return &records[i], nil
+		}
+	}
+	return nil, &app.UIError{Kind: app.ErrorNotFound, Message: fmt.Sprintf("No apply backup with ID %q", backupID)}
+}
+
+// backupResultForError 把一次写入/恢复的结果映射为历史页操作标记：
+// 成功 applied；管理员授权取消 canceled；其余（写失败、读回失败、
+// 授权失败等）failed。
+func backupResultForError(writeErr error) string {
+	switch {
+	case writeErr == nil:
+		return app.BackupResultApplied
+	case errors.Is(writeErr, elevate.ErrCanceled):
+		return app.BackupResultCanceled
+	default:
+		return app.BackupResultFailed
+	}
 }
 
 // ListApplyBackups 返回备份引用（含旧管理块内容），最新在前。
@@ -551,14 +618,18 @@ type storageProfileRef struct {
 }
 
 // backupRef 把 writer 的备份记录映射为契约引用；BlockContent 是
-// 写入前的管理块全量文本（含标记），从备份内容中提取。
+// 写入前的管理块全量文本（含标记），从备份内容中提取。Available
+// 报告备份文件可读性（#35 历史页"可恢复"判断）；Result 透传操作
+// 结果标记。
 func (s *Service) backupRef(record *hostsfile.BackupRecord, prevContent []byte, profile storageProfileRef) *app.ApplyBackupRef {
 	block := ""
+	available := prevContent != nil
 	if prevContent != nil {
 		if text, ok := managedBlockText(string(prevContent)); ok {
 			block = text
 		}
 	} else if data, err := s.volume.ReadFile(filepath.Join(s.writer.BackupDir(), record.File)); err == nil {
+		available = true
 		if text, ok := managedBlockText(string(data)); ok {
 			block = text
 		}
@@ -570,6 +641,8 @@ func (s *Service) backupRef(record *hostsfile.BackupRecord, prevContent []byte, 
 		CreatedAt:    record.CreatedAt,
 		OperationID:  record.OperationID,
 		BlockContent: block,
+		Result:       record.Result,
+		Available:    available,
 	}
 }
 

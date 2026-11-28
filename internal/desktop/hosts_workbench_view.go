@@ -380,7 +380,7 @@ func (m *HostsWorkbenchModel) receiptArea(c *ui.Context) {
 				ui.Text(c, fmt.Sprintf("%s: %s (readback %v)", result.Entity, result.Status, result.ReadbackVerified)).FontSize(12).TextColor(theme.TextMuted)
 			}
 		})
-		if receipt.RollbackRef != nil && ui.Button(c, "Rollback to Backup").Disabled(m.busy()).Clicked() {
+		if receipt.RollbackRef != nil && ui.Button(c, "Undo This Apply").Disabled(m.busy()).Clicked() {
 			m.Rollback(receipt.RollbackRef.ID)
 		}
 	})

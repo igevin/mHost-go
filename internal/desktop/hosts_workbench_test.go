@@ -463,8 +463,8 @@ func TestHostsWorkbenchFailureReceiptOffersRollback(t *testing.T) {
 	if !tester.HasText("Write error") {
 		t.Fatalf("write error banner missing: %q", tester.Texts())
 	}
-	if err := tester.Click("Rollback to Backup"); err != nil {
-		t.Fatalf("click rollback: %v (texts %q)", err, tester.Texts())
+	if err := tester.Click("Undo This Apply"); err != nil {
+		t.Fatalf("click undo this apply: %v (texts %q)", err, tester.Texts())
 	}
 	if model.Problem != nil || model.Applied.ProfileID != "protected" {
 		t.Fatalf("rollback problem/applied = %+v/%+v", model.Problem, model.Applied)

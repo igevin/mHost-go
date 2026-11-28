@@ -228,6 +228,8 @@ func (s *HostsService) Apply(ctx context.Context, planID string, resolutions map
 			CreatedAt:    time.Now().UTC(),
 			OperationID:  operationID,
 			BlockContent: s.block,
+			Available:    true,
+			Result:       app.BackupResultApplied,
 		},
 		prevProfileID:   s.appliedID,
 		prevProfileName: s.appliedNm,
@@ -243,6 +245,10 @@ func (s *HostsService) Apply(ctx context.Context, planID string, resolutions map
 	}
 	if s.failApply {
 		s.failApply = false
+		// 备份已生成但写入失败：补标 failed（receipt 指针指向 backup
+		// 局部变量，同步更新即两边一致），供历史页如实展示。
+		backup.Result = app.BackupResultFailed
+		s.backups[len(s.backups)-1] = backup
 		receipt.Results = append(receipt.Results,
 			app.ApplyResult{Entity: "managed_block", Status: app.WriteFailed, Issue: blockerIssue("managed block write failed (injected failure)")},
 			app.ApplyResult{Entity: "verification", Status: app.WriteSkipped},
@@ -258,6 +264,8 @@ func (s *HostsService) Apply(ctx context.Context, planID string, resolutions map
 	)
 	if s.failVerify {
 		s.failVerify = false
+		backup.Result = app.BackupResultFailed
+		s.backups[len(s.backups)-1] = backup
 		receipt.Results = append(receipt.Results,
 			app.ApplyResult{Entity: "verification", Status: app.WriteWritten, Issue: blockerIssue("readback does not match the merged block (injected mismatch)")},
 		)
@@ -282,6 +290,23 @@ func (s *HostsService) Rollback(ctx context.Context, backupID string) (app.Apply
 		}
 		s.sequence++
 		operationID := fmt.Sprintf("op-%d", s.sequence)
+		// #35：写前安全备份（内容 = 当前管理块，归属恢复后的 profile，
+		// Prev = 恢复前 applied），恢复本身可撤销；语义与真实服务一致。
+		safety := hostsBackup{
+			ApplyBackupRef: app.ApplyBackupRef{
+				ID:           s.nextID("backup"),
+				ProfileID:    backup.prevProfileID,
+				ProfileName:  backup.prevProfileName,
+				CreatedAt:    time.Now().UTC(),
+				OperationID:  operationID,
+				BlockContent: s.block,
+				Available:    true,
+				Result:       app.BackupResultApplied,
+			},
+			prevProfileID:   s.appliedID,
+			prevProfileName: s.appliedNm,
+		}
+		s.backups = append(s.backups, safety)
 		s.block = backup.BlockContent
 		s.appliedID = backup.prevProfileID
 		s.appliedNm = backup.prevProfileName
@@ -294,6 +319,7 @@ func (s *HostsService) Rollback(ctx context.Context, backupID string) (app.Apply
 				{Entity: "managed_block", Status: app.WriteWritten},
 				{Entity: "verification", Status: app.WriteWritten, ReadbackVerified: true},
 			},
+			RollbackRef: &s.backups[len(s.backups)-1].ApplyBackupRef,
 		}, nil
 	}
 	return app.ApplyReceipt{}, demoError(app.ErrorNotFound, "No apply backup with that ID")

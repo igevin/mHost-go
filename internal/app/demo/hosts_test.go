@@ -320,3 +320,109 @@ func TestHostsServiceRollbackUnknownBackup(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// #35 历史语义对齐真实服务：备份标记操作结果；Rollback 生成可撤销
+// 恢复的写前安全备份。
+
+func TestHostsServiceApplyMarksBackupResult(t *testing.T) {
+	service := NewHostsService()
+	ctx := context.Background()
+	plan, err := service.PreviewApply(ctx, "dev", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Apply(ctx, plan.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	backups, err := service.ListApplyBackups(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("backups = %d, want 1", len(backups))
+	}
+	if backups[0].Result != app.BackupResultApplied || !backups[0].Available {
+		t.Fatalf("newest backup = %+v", backups[0])
+	}
+}
+
+func TestHostsServiceApplyFailureMarksBackupFailed(t *testing.T) {
+	service := NewHostsService()
+	ctx := context.Background()
+	plan, err := service.PreviewApply(ctx, "dev", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.FailNextApply()
+	if _, err := service.Apply(ctx, plan.ID, nil); err == nil {
+		t.Fatal("expected apply error")
+	}
+
+	backups, err := service.ListApplyBackups(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 1 || backups[0].Result != app.BackupResultFailed {
+		t.Fatalf("backups = %+v", backups)
+	}
+}
+
+func TestHostsServiceRollbackCreatesUndoBackup(t *testing.T) {
+	service := NewHostsService()
+	ctx := context.Background()
+	plan, err := service.PreviewApply(ctx, "dev", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := service.Apply(ctx, plan.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rollback, err := service.Rollback(ctx, receipt.RollbackRef.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rollback.RollbackRef == nil {
+		t.Fatal("restore receipt must offer the safety backup as undo")
+	}
+
+	backups, err := service.ListApplyBackups(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 2 {
+		t.Fatalf("backups = %d, want 2 (apply + safety)", len(backups))
+	}
+	safety := backups[0]
+	if safety.ID != rollback.RollbackRef.ID {
+		t.Fatalf("newest backup = %s, want undo ref %s", safety.ID, rollback.RollbackRef.ID)
+	}
+	// 恢复后 Active 回到内置 protected：安全备份归属 resulting profile
+	if safety.ProfileID != "protected" || safety.ProfileName != "内置系统" {
+		t.Fatalf("safety backup profile = %q/%q", safety.ProfileID, safety.ProfileName)
+	}
+	if safety.BlockContent == "" {
+		t.Fatal("safety backup should hold the pre-restore block")
+	}
+	if safety.Result != app.BackupResultApplied {
+		t.Fatalf("safety backup result = %q, want %q", safety.Result, app.BackupResultApplied)
+	}
+
+	// 撤销恢复：系统回到 dev 已应用状态
+	undo, err := service.Rollback(ctx, rollback.RollbackRef.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if undo.RollbackRef == nil {
+		t.Fatal("undo restore should itself offer a safety backup")
+	}
+	applied, err := service.AppliedState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.ProfileID != "dev" || applied.Drifted {
+		t.Fatalf("applied after undo = %+v, want dev", applied)
+	}
+}
