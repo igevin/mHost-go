@@ -205,6 +205,9 @@ func (s *Service) applyFailureReceipt(receipt app.ApplyReceipt, err error) (app.
 		return receipt, &app.UIError{Kind: app.ErrorReadback, Message: "Readback verification failed after applying", Detail: message, Cause: err}
 	case errors.Is(err, elevate.ErrCanceled):
 		// 用户在管理员授权框取消：系统 hosts 未被触碰，与写失败区分。
+		// 写前备份虽已生成，但内容与原文件一致，回执不再给 RollbackRef，
+		// 避免 UI 引导一次无意义（且会再次索要密码）的回写。
+		receipt.RollbackRef = nil
 		receipt.Results = append(receipt.Results,
 			app.ApplyResult{Entity: "managed_block", Status: app.WriteSkipped, Issue: &app.StorageIssue{
 				Code: "authorization_canceled", Severity: app.SeverityWarning,
@@ -215,6 +218,8 @@ func (s *Service) applyFailureReceipt(receipt app.ApplyReceipt, err error) (app.
 		return receipt, &app.UIError{Kind: app.ErrorPermission, Message: "Administrator authorization was canceled; the system hosts was not changed", Cause: err}
 	case errors.Is(err, elevate.ErrAuthFailed):
 		// 密码错误等授权失败：hosts 未被触碰，修正密码后可重试。
+		// 同取消分支，不再给 RollbackRef。
+		receipt.RollbackRef = nil
 		receipt.Results = append(receipt.Results,
 			app.ApplyResult{Entity: "managed_block", Status: app.WriteSkipped, Issue: &app.StorageIssue{
 				Code: "authorization_failed", Severity: app.SeverityWarning,

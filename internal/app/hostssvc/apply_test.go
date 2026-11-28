@@ -512,6 +512,10 @@ func TestApplyCanceledAuthorization(t *testing.T) {
 	if managed == nil || managed.Status != app.WriteSkipped {
 		t.Fatalf("managed_block result = %+v, want WriteSkipped", managed)
 	}
+	// hosts 未改动：回执不得再给 RollbackRef，避免 UI 引导无意义回写
+	if receipt.RollbackRef != nil {
+		t.Fatalf("RollbackRef = %+v, want nil after cancel", receipt.RollbackRef)
+	}
 	if got := readHosts(t, env); got != "127.0.0.1 keep.me\n" {
 		t.Fatalf("hosts changed after cancel: %q", got)
 	}
