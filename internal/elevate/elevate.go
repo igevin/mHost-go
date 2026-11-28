@@ -36,7 +36,9 @@ type Runner func(name string, args ...string) ([]byte, error)
 //     全部失败则清理暂存文件并以非零退出，交由调用方走错误路径。
 //
 // 两级转义：shell 层单引号包裹（内嵌单引号按 '\” 惯例），
-// AppleScript 层反斜杠与双引号翻倍。
+// AppleScript 层反斜杠与双引号翻倍。整体包在
+// `with timeout of 0 seconds` 中：AppleScript 对 do shell script
+// 默认 120 秒超时，会覆盖用户在密码框的输入过程。
 func InstallScript(src, target string, mode fs.FileMode) string {
 	staged := target + ".mhost-new"
 	flush := "/usr/bin/dscacheutil -flushcache || true\n/usr/bin/killall -HUP mDNSResponder || true"
@@ -55,7 +57,9 @@ func InstallScript(src, target string, mode fs.FileMode) string {
 		shellQuote(src), shellQuote(src), shellQuote(target),
 		flush,
 		shellQuote(staged))
-	return `do shell script "` + applescriptEscape(shell) + `" with administrator privileges`
+	return "with timeout of 0 seconds\n" +
+		`do shell script "` + applescriptEscape(shell) + `" with administrator privileges` + "\n" +
+		"end timeout"
 }
 
 // InstallWith 用给定执行器运行提权安装，并把结果分类：

@@ -25,8 +25,11 @@ func TestInstallScriptQuoting(t *testing.T) {
 			target: "/etc/hosts",
 			mode:   0o644,
 			want: []string{
+				// 关闭 AppleScript 默认 120s 超时：密码输入不设限
+				"with timeout of 0 seconds",
 				`do shell script `,
 				`with administrator privileges`,
+				"end timeout",
 				`/bin/cat '/var/folders/ab/.mhost-hosts-1' > '/etc/hosts.mhost-new'`,
 				`/bin/chmod 644 '/etc/hosts.mhost-new'`,
 				`/bin/mv -f '/etc/hosts.mhost-new' '/etc/hosts'`,
