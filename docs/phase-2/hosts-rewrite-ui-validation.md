@@ -39,9 +39,9 @@ go test ./internal/app/demo/ -run TestHostsService -v
 
 1. 空态显示 "No profile is loaded until you start the demo" 与 "Demo service · no /etc/hosts writes" 徽标。
 2. 点击 Load Demo Profiles：左侧出现四个 Profile；自动选中"开发环境"，编辑器显示规则内容，Header 显示 Stored、规则数、底部显示 Managed block: 内置系统。
-3. 编辑器内直接输入一行 `127.0.0.1 new.local`：Header 变 Modified，侧栏"开发环境"出现 ●，工具行显示 "Unsaved changes · Save before Apply"。
-4. 点击 Save：回到 Stored，● 消失。
-5. 点击 Apply…：编辑器区域切换为预览面板，DiffView 展示管理块从 `mhost.internal` 到开发环境规则的变化，底部 Cancel / Apply Changes。
+3. 编辑器内直接输入一行 `127.0.0.1 new.local`：Header 变 Modified，侧栏"开发环境"出现 ●，工具行显示 "Unsaved changes · Apply will save this profile first"。
+4. 点击 Save：回到 Stored，● 消失；也可在下一步由 Apply… 自动完成保存。
+5. 点击 Apply…：编辑器区域切换为预览面板；若刚才未手动保存，会先保存当前草稿，再展示 DiffView 中管理块从 `mhost.internal` 到开发环境规则的变化，底部 Cancel / Apply Changes。
 6. 点击 Apply Changes：预览关闭，回执区显示 "Apply verified · 1 checked" 与逐项结果；底部状态变为 Managed block: 开发环境；Header 出现 Applied 徽标。
 7. 验证 `/etc/hosts` 未被修改（Demo 承诺）：`cat /etc/hosts | grep mhost-managed` 应无输出（除非此前有其他来源）。
 
@@ -55,9 +55,9 @@ go test ./internal/app/demo/ -run TestHostsService -v
 
 ### 2.3 草稿保护
 
-1. 在"开发环境"输入任意内容（不保存），点击"冲突样本"：弹出确认对话框，默认 Stay。
-2. 点击 Stay：仍停留在开发环境，草稿保留。
-3. 再次点击"冲突样本"并选择 Switch：切到冲突样本；再切回开发环境：草稿内容仍在，Header 显示 Modified。
+1. 在"开发环境"输入任意内容（不保存），直接点击"冲突样本"：无切换确认，立即切到冲突样本。
+2. 切回"开发环境"：草稿内容仍在，Header 显示 Modified，侧栏保留 ●。
+3. 真正退出宿主应用且仍有未保存草稿时，应显示 Save All / Quit Without Saving / Cancel；取消后草稿不丢失。
 
 ### 2.4 失败与回滚（需调试手段注入）
 

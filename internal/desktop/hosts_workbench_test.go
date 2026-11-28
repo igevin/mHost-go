@@ -83,7 +83,7 @@ func TestHostsWorkbenchEditSaveMarksStoredState(t *testing.T) {
 	}
 }
 
-func TestHostsWorkbenchDirtySwitchRequiresConfirmation(t *testing.T) {
+func TestHostsWorkbenchDirtySwitchSwitchesImmediately(t *testing.T) {
 	model := newTestHostsWorkbench(demo.NewHostsService())
 	loadAndSelect(t, model, "dev")
 	model.Editor.Select(0, 0)
@@ -91,21 +91,18 @@ func TestHostsWorkbenchDirtySwitchRequiresConfirmation(t *testing.T) {
 	model.SyncFromEditor()
 
 	model.SelectProfile("conflict")
-	if model.PendingSwitch != "conflict" || model.SelectedID != "dev" {
-		t.Fatalf("pending/selected = %q/%q", model.PendingSwitch, model.SelectedID)
-	}
-	model.CancelSwitch()
-	if model.PendingSwitch != "" {
-		t.Fatalf("pending = %q", model.PendingSwitch)
-	}
-	model.SelectProfile("conflict")
-	model.ConfirmSwitch()
 	model.SyncFromEditor()
 	if model.SelectedID != "conflict" {
 		t.Fatalf("selected = %q", model.SelectedID)
 	}
 	if !strings.Contains(model.Editor.Buffer.String(), "api.demo.test") {
 		t.Fatalf("editor content = %q", model.Editor.Buffer.String())
+	}
+
+	model.switchToProfile("dev")
+	model.SyncFromEditor()
+	if !strings.Contains(model.Editor.Buffer.String(), "# draft note") || !model.Modified() {
+		t.Fatalf("draft not preserved after immediate switch: %q modified=%v", model.Editor.Buffer.String(), model.Modified())
 	}
 }
 
@@ -144,6 +141,79 @@ func TestHostsWorkbenchEditingInvalidatesStagedPlan(t *testing.T) {
 	}
 	if model.ApplyBlockedReason() == "" {
 		t.Fatal("apply should be blocked with a visible reason")
+	}
+}
+
+func TestHostsWorkbenchApplySavesModifiedDraftBeforePreview(t *testing.T) {
+	model := newTestHostsWorkbench(demo.NewHostsService())
+	loadAndSelect(t, model, "dev")
+	model.Editor.Select(0, 0)
+	model.Editor.Insert("# draft note\n")
+	model.SyncFromEditor()
+
+	model.StartApply()
+	if model.Problem != nil {
+		t.Fatalf("save-and-preview problem = %+v", model.Problem)
+	}
+	if model.Modified() {
+		t.Fatal("draft still modified after Apply… saved it")
+	}
+	if model.Staged == nil || len(model.Staged.Blockers) != 0 {
+		t.Fatalf("staged plan missing after save: %+v", model.Staged)
+	}
+	detail, err := model.Service.LoadProfile(context.Background(), "dev")
+	if err != nil {
+		t.Fatalf("load saved profile: %v", err)
+	}
+	if !strings.Contains(detail.Content, "# draft note") {
+		t.Fatalf("profile was not saved before preview: %q", detail.Content)
+	}
+
+	model.CancelStaged()
+	if model.Info == "" || !strings.Contains(model.Info, "Profile saved") || !strings.Contains(model.Info, "system hosts unchanged") {
+		t.Fatalf("cancel did not explain saved-but-not-applied state: %q", model.Info)
+	}
+}
+
+func TestHostsWorkbenchResolutionKeepsAutoSavedCancelNotice(t *testing.T) {
+	model := newTestHostsWorkbench(demo.NewHostsService())
+	loadAndSelect(t, model, "conflict")
+	model.Editor.Select(0, 0)
+	model.Editor.Insert("# resolution note\n")
+	model.SyncFromEditor()
+
+	model.StartApply()
+	if model.Staged == nil || model.Modified() || model.Problem != nil {
+		t.Fatalf("save-and-preview state: staged=%+v modified=%v problem=%+v", model.Staged, model.Modified(), model.Problem)
+	}
+	model.ChooseResolution("api.demo.test", "192.168.1.1")
+	if model.Staged == nil || model.Problem != nil {
+		t.Fatalf("resolution preview failed: staged=%+v problem=%+v", model.Staged, model.Problem)
+	}
+	model.CancelStaged()
+	if model.Info == "" || !strings.Contains(model.Info, "Profile saved") || !strings.Contains(model.Info, "system hosts unchanged") {
+		t.Fatalf("auto-saved notice lost after resolution: %q", model.Info)
+	}
+}
+
+func TestHostsWorkbenchApplyWithInvalidDraftDoesNotPreview(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 a.com\n")
+	model := newAdminWorkbench(t, svc)
+	model.Load()
+	model.SelectProfile(model.Profiles[0].ID)
+	model.Editor.Select(0, 0)
+	model.Editor.Insert("999.999.999.999 bad.invalid\n")
+	model.SyncFromEditor()
+
+	model.StartApply()
+	if model.Problem == nil {
+		t.Fatal("invalid draft should fail before preview")
+	}
+	if model.Staged != nil {
+		t.Fatalf("invalid draft must not stage an apply plan: %+v", model.Staged)
+	}
+	if !model.Modified() {
+		t.Fatal("failed save-and-preview must keep the editable draft")
 	}
 }
 
@@ -248,6 +318,139 @@ func TestHostsWorkbenchApplyFailureOffersRollback(t *testing.T) {
 	}
 }
 
+func TestHostsWorkbenchQuitWithUnsavedDraftOffersSaveAll(t *testing.T) {
+	model := newTestHostsWorkbench(demo.NewHostsService())
+	loadAndSelect(t, model, "dev")
+	model.Editor.Select(0, 0)
+	model.Editor.Insert("# quit note\n")
+	model.SyncFromEditor()
+	quitted := false
+	model.OnSafeToQuit = func() { quitted = true }
+
+	if model.RequestQuit() {
+		t.Fatal("quit with an unsaved draft should require a choice")
+	}
+	if !model.PendingQuit || model.QuitRequested {
+		t.Fatalf("quit state = pending %v requested %v", model.PendingQuit, model.QuitRequested)
+	}
+	tester := ui.NewTester(model.View, 1120, 760)
+	tester.Frame()
+	if err := tester.Click("Save All"); err != nil {
+		t.Fatalf("click save all: %v (texts %q)", err, tester.Texts())
+	}
+	if model.Problem != nil || model.Modified() || model.PendingQuit {
+		t.Fatalf("save-all quit result: problem=%+v modified=%v pending=%v", model.Problem, model.Modified(), model.PendingQuit)
+	}
+	if !quitted {
+		t.Fatal("safe quit was not triggered after Save All")
+	}
+}
+
+func TestHostsWorkbenchQuitWithUnsavedDraftCanCancel(t *testing.T) {
+	model := newTestHostsWorkbench(demo.NewHostsService())
+	loadAndSelect(t, model, "dev")
+	model.Editor.Select(0, 0)
+	model.Editor.Insert("# quit note\n")
+	model.SyncFromEditor()
+
+	if model.RequestQuit() {
+		t.Fatal("quit with an unsaved draft should require a choice")
+	}
+	model.CancelQuit()
+	if model.PendingQuit || model.QuitRequested {
+		t.Fatalf("cancel did not clear quit state: pending=%v requested=%v", model.PendingQuit, model.QuitRequested)
+	}
+	allowed := model.RequestQuit()
+	if allowed || !model.PendingQuit {
+		t.Fatalf("a new quit request should offer the choice again: allowed=%v pending=%v", allowed, model.PendingQuit)
+	}
+	model.CancelQuit()
+	if !model.Modified() {
+		t.Fatal("canceling quit must not discard the draft")
+	}
+}
+
+func TestHostsWorkbenchQuitWithoutSavingDiscardsDrafts(t *testing.T) {
+	model := newTestHostsWorkbench(demo.NewHostsService())
+	loadAndSelect(t, model, "dev")
+	model.Editor.Select(0, 0)
+	model.Editor.Insert("# quit note\n")
+	model.SyncFromEditor()
+	quitted := false
+	model.OnSafeToQuit = func() { quitted = true }
+
+	if model.RequestQuit() {
+		t.Fatal("quit with an unsaved draft should require a choice")
+	}
+	model.QuitWithoutSaving()
+	if !quitted {
+		t.Fatal("discard choice did not trigger safe quit")
+	}
+	if !model.RequestQuit() {
+		t.Fatal("discard latch should allow the framework quit to proceed")
+	}
+}
+
+func TestHostsWorkbenchSaveAllAndQuitSavesEveryDraft(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 one.test\n", "127.0.0.1 two.test\n")
+	model := newAdminWorkbench(t, svc)
+	model.Load()
+	firstID := model.Profiles[0].ID
+	secondID := model.Profiles[1].ID
+	model.Editor.Select(0, 0)
+	model.Editor.Insert("# first note\n")
+	model.SyncFromEditor()
+	model.switchToProfile(secondID)
+	model.SyncFromEditor()
+	model.Editor.Select(0, 0)
+	model.Editor.Insert("# second note\n")
+	model.SyncFromEditor()
+	quitted := false
+	model.OnSafeToQuit = func() { quitted = true }
+
+	if model.RequestQuit() {
+		t.Fatal("quit with unsaved drafts should require a choice")
+	}
+	model.SaveAllAndQuit()
+	if model.Problem != nil || !quitted {
+		t.Fatalf("save-all quit: problem=%+v quitted=%v", model.Problem, quitted)
+	}
+	for id, note := range map[string]string{firstID: "# first note", secondID: "# second note"} {
+		detail, err := svc.LoadProfile(context.Background(), id)
+		if err != nil {
+			t.Fatalf("load %s: %v", id, err)
+		}
+		if !strings.Contains(detail.Content, note) {
+			t.Fatalf("profile %s was not saved: %q", id, detail.Content)
+		}
+	}
+	if model.SelectedID != secondID {
+		t.Fatalf("save-all changed the selected profile: %q", model.SelectedID)
+	}
+}
+
+func TestHostsWorkbenchSaveAllFailureKeepsApplicationOpen(t *testing.T) {
+	svc, _ := newRealHostsService(t, "127.0.0.1 one.test\n")
+	model := newAdminWorkbench(t, svc)
+	model.Load()
+	model.Editor.Select(0, 0)
+	model.Editor.Insert("999.999.999.999 bad.invalid\n")
+	model.SyncFromEditor()
+	quitted := false
+	model.OnSafeToQuit = func() { quitted = true }
+
+	if model.RequestQuit() {
+		t.Fatal("quit with an unsaved draft should require a choice")
+	}
+	model.SaveAllAndQuit()
+	if model.Problem == nil {
+		t.Fatal("invalid draft should surface a save error")
+	}
+	if quitted || model.PendingQuit || !model.Modified() {
+		t.Fatalf("failed save-all state: quitted=%v pending=%v modified=%v", quitted, model.PendingQuit, model.Modified())
+	}
+}
+
 type blockingHostsService struct {
 	*demo.HostsService
 	applyStarted chan struct{}
@@ -304,6 +507,64 @@ func TestHostsWorkbenchQuitGatedDuringApply(t *testing.T) {
 	quitReq := func() bool { ch := make(chan bool, 1); run(func() { ch <- model.QuitRequested }); return <-ch }()
 	if quitReq || !quitted {
 		t.Fatalf("deferred quit did not continue after the safe boundary: %v/%v", quitReq, quitted)
+	}
+}
+
+func TestHostsWorkbenchDeferredQuitWithDirtyDraftShowsChoiceAfterApply(t *testing.T) {
+	inner := demo.NewHostsService()
+	service := &blockingHostsService{HostsService: inner, applyStarted: make(chan struct{}), release: make(chan struct{})}
+	model := NewHostsWorkbenchModel(service)
+	model.Async = func(fn func()) { fn() }
+	dispatch := make(chan func(), 64)
+	model.Dispatch = func(fn func()) { dispatch <- fn }
+	go func() {
+		for fn := range dispatch {
+			fn()
+		}
+	}()
+	run := func(fn func()) {
+		done := make(chan struct{})
+		dispatch <- func() { fn(); close(done) }
+		<-done
+	}
+	model.DemoMode = true
+	run(func() { model.Load() })
+	run(func() { model.SelectProfile("dev") })
+	run(func() { model.SyncFromEditor() })
+	// 在另一个 Profile 上保留未保存草稿；当前要 Apply 的 dev 保持已保存。
+	run(func() { model.switchToProfile("conflict") })
+	run(func() { model.SyncFromEditor() })
+	run(func() {
+		model.Editor.Select(0, 0)
+		model.Editor.Insert("# deferred quit note\n")
+		model.SyncFromEditor()
+	})
+	run(func() { model.switchToProfile("dev") })
+	run(func() { model.SyncFromEditor() })
+	run(func() { model.PreviewApply() })
+	quitted := false
+	run(func() { model.OnSafeToQuit = func() { quitted = true } })
+	model.Async = func(fn func()) { go fn() }
+	done := make(chan struct{})
+	go func() { model.Apply(); close(done) }()
+	<-service.applyStarted
+	if allowed := func() bool { ch := make(chan bool, 1); run(func() { ch <- model.RequestQuit() }); return <-ch }(); allowed {
+		t.Fatal("quit during an in-flight write must be deferred")
+	}
+	close(service.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		phase := func() HostsPhase { ch := make(chan HostsPhase, 1); run(func() { ch <- model.Phase }); return <-ch }()
+		if phase != HostsPhaseApplying || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	<-done
+	pending := func() bool { ch := make(chan bool, 1); run(func() { ch <- model.PendingQuit }); return <-ch }()
+	quitRequested := func() bool { ch := make(chan bool, 1); run(func() { ch <- model.QuitRequested }); return <-ch }()
+	if !pending || quitRequested || quitted {
+		t.Fatalf("deferred quit with a dirty draft = pending %v requested %v quitted %v", pending, quitRequested, quitted)
 	}
 }
 
@@ -475,7 +736,7 @@ func TestHostsWorkbenchFailureReceiptOffersRollback(t *testing.T) {
 	}
 }
 
-func TestHostsWorkbenchDirtySwitchDialogFromView(t *testing.T) {
+func TestHostsWorkbenchDirtySwitchFromViewSwitchesImmediately(t *testing.T) {
 	model := newTestHostsWorkbench(demo.NewHostsService())
 	loadAndSelect(t, model, "dev")
 	model.Editor.Select(0, 0)
@@ -486,30 +747,12 @@ func TestHostsWorkbenchDirtySwitchDialogFromView(t *testing.T) {
 	if err := tester.Click("冲突样本"); err != nil {
 		t.Fatalf("click profile: %v (texts %q)", err, tester.Texts())
 	}
-	if model.PendingSwitch != "conflict" || model.SelectedID != "dev" {
-		t.Fatalf("pending/selected = %q/%q", model.PendingSwitch, model.SelectedID)
-	}
-	tester.Frame()
-	if err := tester.Click("Stay"); err != nil {
-		t.Fatalf("click stay: %v (texts %q)", err, tester.Texts())
-	}
-	if model.PendingSwitch != "" || model.SelectedID != "dev" {
-		t.Fatalf("after stay: pending/selected = %q/%q", model.PendingSwitch, model.SelectedID)
-	}
-	tester.Frame()
-	if err := tester.Click("冲突样本"); err != nil {
-		t.Fatalf("click profile again: %v", err)
-	}
-	tester.Frame()
-	if err := tester.Click("Switch"); err != nil {
-		t.Fatalf("click switch: %v (texts %q)", err, tester.Texts())
-	}
 	if model.SelectedID != "conflict" {
 		t.Fatalf("selected = %q", model.SelectedID)
 	}
 	model.switchToProfile("dev")
 	model.SyncFromEditor()
-	if !strings.Contains(model.Editor.Buffer.String(), "# note") {
-		t.Fatalf("draft lost: %q", model.Editor.Buffer.String())
+	if !strings.Contains(model.Editor.Buffer.String(), "# note") || !model.Modified() {
+		t.Fatalf("draft lost after view switch: %q modified=%v", model.Editor.Buffer.String(), model.Modified())
 	}
 }

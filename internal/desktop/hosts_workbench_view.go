@@ -68,8 +68,26 @@ func (m *HostsWorkbenchModel) View(c *ui.Context) {
 			})
 		})
 	})
-	m.pendingSwitchDialog(c)
+	m.pendingQuitDialog(c)
 	m.pendingDeleteDialog(c)
+}
+
+func (m *HostsWorkbenchModel) pendingQuitDialog(c *ui.Context) {
+	if !m.PendingQuit || m.busy() {
+		return
+	}
+	open := true
+	message := fmt.Sprintf("You have %d unsaved profile(s). Save them before quitting?", m.unsavedDraftCount())
+	switch ui.AlertDialog(c, &open, "Unsaved changes", message, "Cancel", "Save All", "Quit Without Saving") {
+	case 1:
+		m.SaveAllAndQuit()
+	case 2:
+		m.QuitWithoutSaving()
+	default:
+		if !open {
+			m.CancelQuit()
+		}
+	}
 }
 
 func (m *HostsWorkbenchModel) pendingDeleteDialog(c *ui.Context) {
@@ -252,21 +270,18 @@ func (m *HostsWorkbenchModel) profileHeader(c *ui.Context) {
 func (m *HostsWorkbenchModel) toolbar(c *ui.Context) {
 	theme := c.Theme()
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		if ui.PrimaryButton(c, "Save").Disabled(m.busy() || !m.Modified()).Clicked() {
+		if ui.Button(c, "Save").Disabled(m.busy() || !m.Modified()).Clicked() {
 			m.Save()
 		}
 		if !m.Modified() {
 			ui.Text(c, "Draft matches the stored profile").FontSize(11).TextColor(theme.TextMuted)
 		} else {
-			ui.Text(c, "Unsaved changes · Save before Apply").FontSize(11).TextColor(theme.TextMuted)
+			ui.Text(c, "Unsaved changes · Apply will save this profile first").FontSize(11).TextColor(theme.TextMuted)
 		}
 		ui.Spacer(c)
 		if m.Staged == nil {
-			if ui.PrimaryButton(c, "Apply…").Disabled(m.busy() || m.Modified() || m.SelectedID == "").Clicked() {
-				m.PreviewApply()
-			}
-			if m.Modified() {
-				ui.Text(c, "Apply needs a saved draft").FontSize(11).TextColor(theme.TextMuted)
+			if ui.PrimaryButton(c, "Apply…").Disabled(m.busy() || m.SelectedID == "").Clicked() {
+				m.StartApply()
 			}
 		} else {
 			if ui.Button(c, "Cancel Preview").Disabled(m.busy()).Clicked() {
@@ -384,28 +399,6 @@ func (m *HostsWorkbenchModel) receiptArea(c *ui.Context) {
 			m.Rollback(receipt.RollbackRef.ID)
 		}
 	})
-}
-
-func (m *HostsWorkbenchModel) pendingSwitchDialog(c *ui.Context) {
-	if m.PendingSwitch == "" {
-		return
-	}
-	open := true
-	name := m.PendingSwitch
-	if profile := m.profileByID(m.PendingSwitch); profile != nil {
-		name = profile.Name
-	}
-	message := fmt.Sprintf("Switch to %q and keep the unsaved draft? You can come back to it later.", name)
-	switch ui.AlertDialog(c, &open, "Unsaved changes", message, "Switch", "Stay") {
-	case 0:
-		m.ConfirmSwitch()
-	case 1:
-		m.CancelSwitch()
-	default:
-		if !open {
-			m.CancelSwitch()
-		}
-	}
 }
 
 func (m *HostsWorkbenchModel) updateHostsDiagnostics() {

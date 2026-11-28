@@ -11,7 +11,7 @@ Hosts Rewrite Workbench 是 #16 的交互验证台：证明新设计的 hosts �
 - 单一可编辑表面：选中 Profile 即可编辑，取消源项目的只读/编辑模式切换。
 - 诊断落到行：解析错误与不同 IP 冲突在编辑器 gutter 行内标注，并在问题面板中与行双向联动。
 - 阻断类问题必有可见原因和解决路径，不得只禁用按钮。
-- Save（存草稿）与 Apply（改写管理块）显式分离，顺序和禁用原因可见。
+- Save（存草稿）与 Apply（改写管理块）仍然显式区分；有未保存草稿时 Apply… 先自动保存，再进入预览和最终确认，顺序及失败原因可见。
 - staged 内嵌预览替代模态弹窗：diff、冲突与保留选择、备份说明在同一面板内。
 - Apply 回执常驻；失败时 Rollback 是回执区的持久动作，不依赖弹窗存续。
 - 存储态（Stored/Modified）与应用态（Applied/Drifted）分离展示。
@@ -32,10 +32,10 @@ Hosts Rewrite Workbench 是 #16 的交互验证台：证明新设计的 hosts �
 | 默认只读，点 Edit Rules 进入编辑，草稿在 View/Editor 双份维护 | 选中即编辑；草稿存 per-profile 草稿表，切换不丢失 |
 | 校验错误列表堆在编辑器下方，与行脱节 | editor 原生 diagnostics 落到行；问题面板点击跳行 |
 | different-IP 冲突静默禁用 Confirm | 冲突列出 domain/行/IP，必须选择保留哪个 IP 才能 Apply |
-| Enable/Disable 开关同时改 Profile 态并触发改写 | Save 与 Apply… 两个显式动作；Header 分示 Stored/Modified 与 Applied/Drifted |
+| Enable/Disable 开关同时改 Profile 态并触发改写 | Save 为显式保存；Apply… 是带预览的最终改写入口，必要时先保存草稿；Header 分示 Stored/Modified 与 Applied/Drifted |
 | 预览/执行中/成功/失败四态挤一个模态弹窗 | staged 内嵌预览面板（DiffView）+ 常驻回执区 |
 | Rollback 只在弹窗存活期间可用 | Rollback 是回执区的持久按钮 |
-| 带未保存修改切 Profile 直接丢草稿 | 脏切换弹确认（默认 Stay），草稿保留可回 |
+| 带未保存修改切 Profile 直接丢草稿 | 直接切换且草稿按 Profile 保留；确认只出现在真正退出并可能丢草稿时 |
 | 搜索是独立悬浮组件 | editor 原生 FindBar（Cmd-F） |
 
 ## 3. 信息架构
@@ -94,12 +94,12 @@ staged 预览状态替换编辑器区域：
 
 ### 4.4 改写（Apply）
 
-1. `Apply…` 生成计划（Plan ID + Base Revision）。Modified 状态禁用 Apply…，原因可见："Apply needs a saved draft"。
+1. `Apply…` 生成计划（Plan ID + Base Revision）。当前草稿已修改时，入口先执行 Save；保存失败留在编辑态并显示原因，保存成功后继续生成计划。
 2. staged 预览面板展示：管理块前后行数、DiffView（CurrentBlock → MergedBlock）、blocker 文案、冲突保留选择、备份说明。
 3. 存在 blocker（解析错误）时 `Apply Changes` 禁用，原因："Fix n parse error(s) in the editor first"。
 4. 存在冲突时必须为每个冲突域选择保留 IP，否则禁用，原因："Choose which IP to keep for ..."。选择只影响改写结果，不改编辑器内容；用户也可以回编辑器修改后重新预览。
 5. 草稿在预览后被编辑 → 计划标记 Stale，必须重新预览（本地标记 + 服务侧 Base Revision 校验双保险）。
-6. `Cancel` 默认操作，关闭预览不改变任何状态。
+6. `Cancel` 默认操作，关闭预览不改写系统 Hosts；若刚才由 Apply… 自动保存了草稿，回执区明确说明“Profile 已保存，系统 Hosts 未修改”。
 7. Apply 执行期间进入 `applying`：不可取消，Cmd-Q/Tray Quit 延迟到安全边界；失败则取消延迟退出并展示回执。
 
 ### 4.5 回执与回滚
